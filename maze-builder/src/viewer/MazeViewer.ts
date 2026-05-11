@@ -2,7 +2,7 @@ import gsap from "gsap";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GRID_TO_WORLD_SCALE } from "../maze/constants";
-import { MazeLayout, MazeRailJson, Vec3Dict } from "../maze/types";
+import { DirAbs, MazeLayout, MazeRailJson, RotAbs, Vec3Dict } from "../maze/types";
 
 export interface RailMeta {
   id: number;
@@ -24,11 +24,21 @@ export interface RailEditAction {
   amount?: number;
 }
 
+export interface BuildExitTarget {
+  parentRailId: number;
+  exitIndex: number;
+  isConnected: boolean;
+  exitPosRev: Vec3Dict;
+  exitPosAbs: Vec3Dict;
+  exitRotAbs: RotAbs;
+  exitDirAbs: DirAbs;
+  spinDiffs: number[];
+}
+
 interface PointerState {
   x: number;
   y: number;
   action: RailEditAction | null;
-  gizmoCenter: THREE.Vector3 | null;
   axisViewDir: THREE.Vector2 | null;
   appliedSteps: number;
   draggingGizmo: boolean;
@@ -52,10 +62,14 @@ export class MazeViewer {
   private spriteMap = new Map<number, THREE.Sprite>();
   private railDataMap = new Map<number, RailMeta>();
   private railMarkerMap = new Map<number, THREE.Object3D[]>();
+  private exitMarkerMap = new Map<string, THREE.Object3D>();
   private editGizmo?: THREE.Group;
+  private buildPreviewGroup?: THREE.Group;
   private editorMode: EditorMode = "move";
+  private buildMode = false;
   private pointerState: PointerState | null = null;
   private lastHoveredId: number | null = null;
+  private buildHoveredExitKey: string | null = null;
   private selectedId: number | null = null;
   private highlightedMarkers: THREE.Object3D[] = [];
   private activeLayout?: MazeLayout;
@@ -67,6 +81,8 @@ export class MazeViewer {
   onHover?: (rail: RailMeta | null) => void;
   onSelect?: (rail: RailMeta | null) => void;
   onEdit?: (action: RailEditAction) => void;
+  onBuildHover?: (target: BuildExitTarget | null) => void;
+  onBuildPlace?: (target: BuildExitTarget) => void;
 
   constructor(private host: HTMLElement) {
     this.scene.background = new THREE.Color(0xfbfbf8);
@@ -106,6 +122,7 @@ export class MazeViewer {
 
   setLayout(layout: MazeLayout, selectedId: number | null = null, animate = true): void {
     this.activeLayout = layout;
+    this.clearBuildPreview();
     if (this.root) this.scene.remove(this.root);
     if (this.editGizmo) {
       this.scene.remove(this.editGizmo);
@@ -117,7 +134,9 @@ export class MazeViewer {
     this.spriteMap.clear();
     this.railDataMap.clear();
     this.railMarkerMap.clear();
+    this.exitMarkerMap.clear();
     this.lastHoveredId = null;
+    this.buildHoveredExitKey = null;
     this.selectedId = selectedId;
     this.highlightedMarkers = [];
 
@@ -133,6 +152,25 @@ export class MazeViewer {
   setEditorMode(mode: EditorMode): void {
     this.editorMode = mode;
     this.refreshEditGizmo();
+  }
+
+  setBuildMode(active: boolean): void {
+    this.buildMode = active;
+    this.host.classList.toggle("is-building", active);
+    if (active) {
+      this.setSelection(null);
+    } else {
+      this.setBuildExitHover(null);
+      this.clearBuildPreview();
+    }
+    this.refreshEditGizmo();
+  }
+
+  setBuildPreview(rail: MazeRailJson | null): void {
+    this.clearBuildPreview();
+    if (!rail || !this.root) return;
+    this.buildPreviewGroup = this.createBuildPreview(rail);
+    this.root.add(this.buildPreviewGroup);
   }
 
   selectRail(id: number | null): void {
@@ -323,6 +361,7 @@ export class MazeViewer {
   private drawRails(rails: MazeRailJson[]): void {
     if (!this.root) return;
     const difficultyByRail = this.calculateRailDifficulties(rails);
+    const violationCells = this.calculateViolationCells(rails);
 
     rails.forEach((rail) => {
       const { center, size } = this.railBounds(rail);
@@ -349,12 +388,14 @@ export class MazeViewer {
       this.addTextSprite(rail.Rail_Index, new THREE.Vector3(center.x, center.y, center.z));
     });
 
+    this.drawViolationCells(violationCells);
+
     rails.forEach((rail) => {
       const enterDir = this.forwardDirFromRotAbs(rail.Rot_Abs);
       this.addRailMarker(rail.Rail_Index, this.createEnterMarker(rail.Pos_Abs, enterDir, rail.Rot_Abs));
 
       rail.Exit.forEach((exit) => {
-        this.addRailMarker(rail.Rail_Index, this.createExitMarker(exit));
+        this.addRailMarker(rail.Rail_Index, this.createExitMarker(rail.Rail_Index, exit));
       });
 
       const prev = rails.find((candidate) => candidate.Rail_Index === rail.Prev_Index);
@@ -365,6 +406,49 @@ export class MazeViewer {
         ];
         this.root?.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x303633, opacity: 0.22, transparent: true })));
       }
+    });
+  }
+
+  private calculateViolationCells(rails: MazeRailJson[]): Set<string> {
+    const counts = new Map<string, number>();
+    const key = (cell: Vec3Dict) => `${cell.x},${cell.y},${cell.z}`;
+    rails.forEach((rail) => {
+      this.visualCellsForRail(rail).forEach((cell) => counts.set(key(cell), (counts.get(key(cell)) ?? 0) + 1));
+    });
+
+    const radiusX = Math.max(0, Math.floor((this.bounds.x - 1) / 2));
+    const radiusY = Math.max(0, Math.floor((this.bounds.y - 1) / 2));
+    const radiusZ = Math.max(0, Math.floor((this.bounds.z - 1) / 2));
+    const invalid = new Set<string>();
+    rails.forEach((rail) => {
+      this.visualCellsForRail(rail).forEach((cell) => {
+        const cellKey = key(cell);
+        const overlaps = (counts.get(cellKey) ?? 0) > 1;
+        const outOfBounds = cell.x < -radiusX || cell.x > radiusX || cell.y < -radiusY || cell.y > radiusY || cell.z < -radiusZ || cell.z > radiusZ;
+        if (overlaps || outOfBounds) invalid.add(cellKey);
+      });
+    });
+    return invalid;
+  }
+
+  private drawViolationCells(cells: Set<string>): void {
+    if (!this.root || cells.size === 0) return;
+    const material = new THREE.MeshLambertMaterial({
+      color: 0xf03b3b,
+      transparent: true,
+      opacity: 0.72,
+      depthTest: false,
+      depthWrite: false,
+    });
+    cells.forEach((cellKey) => {
+      const [x, y, z] = cellKey.split(",").map(Number);
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(GRID_TO_WORLD_SCALE - 0.8, GRID_TO_WORLD_SCALE - 0.8, GRID_TO_WORLD_SCALE - 0.8),
+        material.clone(),
+      );
+      mesh.position.set(x * GRID_TO_WORLD_SCALE, -y * GRID_TO_WORLD_SCALE, z * GRID_TO_WORLD_SCALE);
+      mesh.renderOrder = 30;
+      this.root?.add(mesh);
     });
   }
 
@@ -441,11 +525,25 @@ export class MazeViewer {
     return marker;
   }
 
-  private createExitMarker(exit: MazeRailJson["Exit"][number]): THREE.Object3D {
+  private createExitMarker(parentRailId: number, exit: MazeRailJson["Exit"][number]): THREE.Object3D {
     const group = new THREE.Group();
     group.position.copy(this.markerPosition(exit.Exit_Pos_Abs, exit.Exit_Dir_Abs));
     group.quaternion.copy(this.markerQuaternion(exit.Exit_Dir_Abs, exit.Exit_Rot_Abs));
     group.renderOrder = 20;
+    const target: BuildExitTarget = {
+      parentRailId,
+      exitIndex: exit.Index,
+      isConnected: exit.IsConnected,
+      exitPosRev: exit.Exit_Pos_Rev,
+      exitPosAbs: exit.Exit_Pos_Abs,
+      exitRotAbs: exit.Exit_Rot_Abs,
+      exitDirAbs: exit.Exit_Dir_Abs,
+      spinDiffs: this.exitSpinDiffs(exit),
+    };
+    const markerKey = this.exitKey(parentRailId, exit.Index);
+    group.userData.isExitMarker = true;
+    group.userData.buildTarget = target;
+    group.userData.exitMarkerKey = markerKey;
 
     const color = exit.IsConnected ? 0x46d483 : 0xf06363;
     const material = this.markerMaterial(color);
@@ -473,6 +571,9 @@ export class MazeViewer {
       geometry.computeVertexNormals();
       const mesh = new THREE.Mesh(geometry, material.clone());
       mesh.renderOrder = 20;
+      mesh.userData.isExitMarker = true;
+      mesh.userData.buildTarget = target;
+      mesh.userData.exitMarkerKey = markerKey;
       group.add(mesh);
     });
 
@@ -481,7 +582,21 @@ export class MazeViewer {
     base.computeVertexNormals();
     const baseMesh = new THREE.Mesh(base, material.clone());
     baseMesh.renderOrder = 20;
+    baseMesh.userData.isExitMarker = true;
+    baseMesh.userData.buildTarget = target;
+    baseMesh.userData.exitMarkerKey = markerKey;
     group.add(baseMesh);
+
+    const hitMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(GRID_TO_WORLD_SCALE * 0.42, 16, 10),
+      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+    );
+    hitMesh.userData.isExitMarker = true;
+    hitMesh.userData.buildTarget = target;
+    hitMesh.userData.exitMarkerKey = markerKey;
+    group.add(hitMesh);
+
+    this.exitMarkerMap.set(markerKey, group);
 
     return group;
   }
@@ -510,6 +625,53 @@ export class MazeViewer {
     const current = this.railMarkerMap.get(railId) ?? [];
     current.push(marker);
     this.railMarkerMap.set(railId, current);
+  }
+
+  private exitKey(parentRailId: number, exitIndex: number): string {
+    return `${parentRailId}:${exitIndex}`;
+  }
+
+  private createBuildPreview(rail: MazeRailJson): THREE.Group {
+    const group = new THREE.Group();
+    group.name = "BuildPreview";
+    const { center, size } = this.railBounds(rail);
+    const material = new THREE.MeshLambertMaterial({
+      color: 0xffe873,
+      transparent: true,
+      opacity: 0.36,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(size.x, size.y, size.z), material);
+    mesh.position.copy(center);
+    mesh.renderOrder = 34;
+    group.add(mesh);
+
+    const edges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(size.x, size.y, size.z)),
+      new THREE.LineBasicMaterial({ color: 0x28302d, transparent: true, opacity: 0.58, depthTest: false }),
+    );
+    edges.position.copy(center);
+    edges.renderOrder = 35;
+    group.add(edges);
+
+    return group;
+  }
+
+  private clearBuildPreview(): void {
+    if (!this.buildPreviewGroup) return;
+    this.buildPreviewGroup.parent?.remove(this.buildPreviewGroup);
+    this.buildPreviewGroup.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      mesh.geometry?.dispose?.();
+      const material = mesh.material as THREE.Material | THREE.Material[] | undefined;
+      if (Array.isArray(material)) {
+        material.forEach((item) => item.dispose());
+      } else {
+        material?.dispose?.();
+      }
+    });
+    this.buildPreviewGroup = undefined;
   }
 
   private markerQuaternion(dirAbs: string, rotAbs: { p?: number; y?: number; r?: number }): THREE.Quaternion {
@@ -551,6 +713,12 @@ export class MazeViewer {
 
   private handleMouseMove = (event: MouseEvent): void => {
     if (this.pointerState?.draggingGizmo) return;
+    if (this.buildMode) {
+      const target = this.pickBuildExit(event);
+      this.setBuildExitHover(target);
+      this.onBuildHover?.(target);
+      return;
+    }
     const found = this.pickRail(event);
     if (this.selectedId === null) this.setHover(found?.id ?? null);
     this.onHover?.(found);
@@ -558,24 +726,36 @@ export class MazeViewer {
 
   private handlePointerDown = (event: PointerEvent): void => {
     if (event.button !== 0) return;
+    if (this.buildMode) {
+      this.pointerState = {
+        x: event.clientX,
+        y: event.clientY,
+        action: null,
+        axisViewDir: null,
+        appliedSteps: 0,
+        draggingGizmo: false,
+      };
+      return;
+    }
     const action = this.pickEditAction(event);
     if (action) {
       const center = this.editGizmo?.position.clone() ?? null;
-      const axisViewDir = center ? this.projectedAxisDirection(center, action) : null;
+      const axisViewDir = center
+        ? action.mode === "move"
+          ? this.projectedMoveDirection(center, action)
+          : this.projectedRotateDirection(center, event)
+        : null;
       this.pointerState = {
         x: event.clientX,
         y: event.clientY,
         action,
-        gizmoCenter: center,
         axisViewDir,
         appliedSteps: 0,
-        draggingGizmo: action.mode === "move",
+        draggingGizmo: true,
       };
-      if (action.mode === "move") {
-        event.preventDefault();
-        this.controls.enabled = false;
-        this.renderer.domElement.setPointerCapture(event.pointerId);
-      }
+      event.preventDefault();
+      this.controls.enabled = false;
+      this.renderer.domElement.setPointerCapture(event.pointerId);
       return;
     }
 
@@ -583,7 +763,6 @@ export class MazeViewer {
       x: event.clientX,
       y: event.clientY,
       action: null,
-      gizmoCenter: null,
       axisViewDir: null,
       appliedSteps: 0,
       draggingGizmo: false,
@@ -596,7 +775,8 @@ export class MazeViewer {
     event.preventDefault();
     const dx = event.clientX - state.x;
     const dy = event.clientY - state.y;
-    const rawSteps = dx * state.axisViewDir.x + dy * state.axisViewDir.y;
+    const stepSize = state.action.mode === "move" ? 1 : 28;
+    const rawSteps = (dx * state.axisViewDir.x + dy * state.axisViewDir.y) / stepSize;
     const steps = rawSteps > 0 ? Math.floor(rawSteps) : Math.ceil(rawSteps);
     const delta = steps - state.appliedSteps;
     if (delta === 0) return;
@@ -619,11 +799,13 @@ export class MazeViewer {
     }
 
     const moved = Math.hypot(event.clientX - state.x, event.clientY - state.y);
-    if (state.action) {
-      if (state.action.mode === "rotate" && moved < 5) this.onEdit?.(state.action);
+    if (state.action) return;
+    if (moved >= 5) return;
+    if (this.buildMode) {
+      const target = this.pickBuildExit(event);
+      if (target) this.onBuildPlace?.(target);
       return;
     }
-    if (moved >= 5) return;
     const found = this.pickRail(event);
     this.setSelection(found?.id ?? null);
     this.onSelect?.(found);
@@ -646,6 +828,22 @@ export class MazeViewer {
       const action = hit.object.userData.editAction as RailEditAction | undefined;
       if (action) return action;
     }
+    return null;
+  }
+
+  private pickBuildExit(event: MouseEvent): BuildExitTarget | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this.mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.mouse, this.camera);
+    const intersects = this.raycaster.intersectObjects(this.scene.children, true);
+
+    for (const hit of intersects) {
+      const obj = hit.object as THREE.Object3D & { userData: Record<string, unknown> };
+      const target = obj.userData.buildTarget as BuildExitTarget | undefined;
+      if (target && !target.isConnected) return target;
+    }
+
     return null;
   }
 
@@ -705,6 +903,18 @@ export class MazeViewer {
     this.highlightMarkers(id);
   }
 
+  private setBuildExitHover(target: BuildExitTarget | null): void {
+    const key = target ? this.exitKey(target.parentRailId, target.exitIndex) : null;
+    if (this.buildHoveredExitKey === key) return;
+    if (this.buildHoveredExitKey) {
+      this.exitMarkerMap.get(this.buildHoveredExitKey)?.scale.setScalar(1);
+    }
+    this.buildHoveredExitKey = key;
+    if (key) {
+      this.exitMarkerMap.get(key)?.scale.setScalar(1.72);
+    }
+  }
+
   private highlightMarkers(id: number): void {
     this.highlightedMarkers = this.railMarkerMap.get(id) ?? [];
     this.highlightedMarkers.forEach((marker) => marker.scale.setScalar(1.45));
@@ -726,7 +936,7 @@ export class MazeViewer {
       });
       this.editGizmo = undefined;
     }
-    if (this.selectedId === null || !this.activeLayout) return;
+    if (this.buildMode || this.selectedId === null || !this.activeLayout) return;
     const rail = this.activeLayout.Rail.find((item) => item.Rail_Index === this.selectedId);
     if (!rail) return;
     const bounds = this.railBounds(rail);
@@ -739,13 +949,17 @@ export class MazeViewer {
     group.position.copy(center);
     group.renderOrder = 40;
     const length = GRID_TO_WORLD_SCALE * 1.35;
-    const axes = [
+    const axes = this.editorMode === "move" ? [
       { axis: "x" as const, sign: 1 as const, dir: new THREE.Vector3(1, 0, 0), color: 0xe85b5b },
       { axis: "x" as const, sign: -1 as const, dir: new THREE.Vector3(-1, 0, 0), color: 0xe85b5b },
       { axis: "y" as const, sign: 1 as const, dir: new THREE.Vector3(0, -1, 0), color: 0x40b870 },
       { axis: "y" as const, sign: -1 as const, dir: new THREE.Vector3(0, 1, 0), color: 0x40b870 },
       { axis: "z" as const, sign: 1 as const, dir: new THREE.Vector3(0, 0, 1), color: 0x4f72ff },
       { axis: "z" as const, sign: -1 as const, dir: new THREE.Vector3(0, 0, -1), color: 0x4f72ff },
+    ] : [
+      { axis: "x" as const, sign: 1 as const, dir: new THREE.Vector3(1, 0, 0), color: 0xe85b5b },
+      { axis: "y" as const, sign: 1 as const, dir: new THREE.Vector3(0, -1, 0), color: 0x40b870 },
+      { axis: "z" as const, sign: 1 as const, dir: new THREE.Vector3(0, 0, 1), color: 0x4f72ff },
     ];
     axes.forEach((item) => {
       const obj = this.editorMode === "move"
@@ -759,7 +973,7 @@ export class MazeViewer {
     return group;
   }
 
-  private projectedAxisDirection(center: THREE.Vector3, action: RailEditAction): THREE.Vector2 | null {
+  private projectedMoveDirection(center: THREE.Vector3, action: RailEditAction): THREE.Vector2 | null {
     const axis = this.actionViewDirection(action).multiplyScalar(GRID_TO_WORLD_SCALE);
     const start = center.clone().project(this.camera);
     const end = center.clone().add(axis).project(this.camera);
@@ -771,6 +985,18 @@ export class MazeViewer {
     const length = screen.length();
     if (length < 0.001) return null;
     return screen.normalize().divideScalar(length);
+  }
+
+  private projectedRotateDirection(center: THREE.Vector3, event: PointerEvent): THREE.Vector2 | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const projected = center.clone().project(this.camera);
+    const centerScreen = new THREE.Vector2(
+      rect.left + ((projected.x + 1) * rect.width) / 2,
+      rect.top + ((1 - projected.y) * rect.height) / 2,
+    );
+    const radial = new THREE.Vector2(event.clientX - centerScreen.x, event.clientY - centerScreen.y);
+    if (radial.length() < 1) radial.set(1, 0);
+    return new THREE.Vector2(-radial.y, radial.x).normalize();
   }
 
   private actionViewDirection(action: RailEditAction): THREE.Vector3 {
@@ -795,13 +1021,9 @@ export class MazeViewer {
   private createRotateHandle(dir: THREE.Vector3, length: number, color: THREE.ColorRepresentation): THREE.Object3D {
     const group = new THREE.Group();
     const material = new THREE.MeshLambertMaterial({ color, transparent: true, opacity: 0.82, depthTest: false });
-    const radius = Math.max(5, length * 0.34);
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.7, 8, 48, Math.PI * 1.35), material);
-    const head = new THREE.Mesh(new THREE.ConeGeometry(2.2, 4.8, 16), material.clone());
-    head.position.set(radius, 0, 0);
-    head.rotation.z = -Math.PI / 2;
-    group.add(ring, head);
-    group.position.copy(dir.clone().normalize().multiplyScalar(length * 0.38));
+    const radius = Math.max(8, length * 0.44);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.85, 10, 72), material);
+    group.add(ring);
     group.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir.clone().normalize()));
     group.renderOrder = 40;
     return group;

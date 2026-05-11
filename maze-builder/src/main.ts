@@ -4,8 +4,8 @@ import sampleLayoutRaw from "../maze_layout.json?raw";
 import { loadConfigFromCsv } from "./maze/csv";
 import { calculateOccupiedCellsWithRotAbs, composeRotAbs, exitDirFromLocalRot, MazeGenerator, transformByRotAbs } from "./maze/generator";
 import { DEFAULT_GENERATOR_OPTIONS, GRID_TO_WORLD_SCALE } from "./maze/constants";
-import { MazeLayout, MazeRailJson, RotAbs, Vec3Dict, Vector3 } from "./maze/types";
-import { EditorMode, MazeViewer, RailEditAction, RailMeta } from "./viewer/MazeViewer";
+import { MazeLayout, MazeRailJson, RailConfigItem, RotAbs, Vec3Dict, Vector3 } from "./maze/types";
+import { BuildExitTarget, EditorMode, MazeViewer, RailEditAction, RailMeta } from "./viewer/MazeViewer";
 import "./styles/main.css";
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -13,6 +13,29 @@ if (!app) throw new Error("Missing #app");
 
 const SEED_VERSION = "bm01";
 const RANDOM_SEED_MAX = 36 ** 6;
+const BUILD_GROUPS = [
+  { id: "straight", label: "Straight" },
+  { id: "curve", label: "Curve" },
+  { id: "bump", label: "Bump" },
+  { id: "tube", label: "Tube" },
+  { id: "special", label: "Special" },
+] as const;
+
+type BuildGroupId = (typeof BUILD_GROUPS)[number]["id"];
+
+interface BuildSelection {
+  familyKey: string;
+  railId: string;
+  sizeIndex: number;
+  spin: number;
+}
+
+interface BuildRailFamily {
+  key: string;
+  group: BuildGroupId;
+  descriptor: string;
+  variants: RailConfigItem[];
+}
 
 function createRandomSeed(): number {
   return Math.floor(Math.random() * RANDOM_SEED_MAX);
@@ -45,6 +68,16 @@ function createRandomSeedState(): GeneratorSeedState {
       y: randomOdd(7, 15),
       z: randomOdd(1, 7),
     },
+  };
+}
+
+function createInitialSeedState(): GeneratorSeedState {
+  return {
+    random: createRandomSeed(),
+    targetDifficulty: DEFAULT_GENERATOR_OPTIONS.targetDifficulty,
+    targetCheckpoints: DEFAULT_GENERATOR_OPTIONS.targetCheckpoints,
+    maxSpins: DEFAULT_GENERATOR_OPTIONS.maxSpins,
+    bounds: DEFAULT_GENERATOR_OPTIONS.bounds.toDict(),
   };
 }
 
@@ -124,7 +157,7 @@ app.innerHTML = `
             <label class="field">
               <span class="help-label" data-help="完整生成种子，格式为 bm01-random-difficulty-checkpoints-spins-bounds。输入有效 seed 会自动反写配置并生成迷宫。">Seed</span>
               <div class="seed-row">
-                <input id="seedInput" type="text" value="${encodeSeedState(createRandomSeedState())}" />
+                <input id="seedInput" type="text" value="${encodeSeedState(createInitialSeedState())}" />
                 <button id="randomSeedBtn" class="icon-button" title="随机生成一套新的 seed 和配置。">↻</button>
               </div>
             </label>
@@ -200,6 +233,15 @@ app.innerHTML = `
           <button data-view="back" class="axis-y" title="Back view">-Y</button>
         </div>
       </div>
+      <div class="build-tray" id="buildTray" aria-label="Rail build library">
+        <div class="build-tray-head">
+          <span>Rail Library</span>
+          <span id="buildHint">Select a rail to build from open exits.</span>
+        </div>
+        <div id="partTabs" class="part-tabs" role="tablist"></div>
+        <div id="descTabs" class="desc-tabs" role="tablist"></div>
+        <div id="partStrip" class="part-strip" aria-label="Rail parts"></div>
+      </div>
       <div class="log-dock is-collapsed">
         <div class="log-head">
           <button id="logToggleBtn" class="collapse-toggle log-toggle" title="展开生成日志内容。" aria-label="Toggle generation log" aria-expanded="false"></button>
@@ -231,6 +273,11 @@ const focusToggleBtn = document.querySelector<HTMLButtonElement>("#focusToggleBt
 const viewAxis = document.querySelector<HTMLDivElement>(".view-axis")!;
 const collapseToggles = document.querySelectorAll<HTMLButtonElement>(".collapse-toggle[data-collapse-target]");
 const dropZone = document.querySelector<HTMLDivElement>("#dropZone")!;
+const buildTray = document.querySelector<HTMLDivElement>("#buildTray")!;
+const buildHint = document.querySelector<HTMLSpanElement>("#buildHint")!;
+const partTabs = document.querySelector<HTMLDivElement>("#partTabs")!;
+const descTabs = document.querySelector<HTMLDivElement>("#descTabs")!;
+const partStrip = document.querySelector<HTMLDivElement>("#partStrip")!;
 const seedInput = document.querySelector<HTMLInputElement>("#seedInput")!;
 const difficultyInput = document.querySelector<HTMLInputElement>("#difficultyInput")!;
 const checkpointInput = document.querySelector<HTMLInputElement>("#checkpointInput")!;
@@ -247,6 +294,11 @@ let selectedRail: RailMeta | null = null;
 let selectedRailId: number | null = null;
 let editorMode: EditorMode = "move";
 let deleteMode = false;
+let buildSelection: BuildSelection | null = null;
+let buildHoverTarget: BuildExitTarget | null = null;
+let buildActiveGroup: BuildGroupId = "straight";
+let buildActiveDescriptor = "Normal";
+let buildPreviewMessage = "Select a rail to build from open exits.";
 let seedInputTimer: number | undefined;
 
 function markLatin(text: string): string {
@@ -254,9 +306,144 @@ function markLatin(text: string): string {
   return escape(text).replace(/[A-Za-z0-9_.:/()+,-]+/g, (match) => `<span class="latin">${match}</span>`);
 }
 
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
+}
+
+function classifyRailGroup(rail: RailConfigItem): BuildGroupId {
+  const lower = rail.rowName.toLowerCase();
+  if (lower.includes("straight")) return "straight";
+  if (lower.includes("curve")) return "curve";
+  if (lower.includes("bump")) return "bump";
+  if (lower.includes("tube") || lower.includes("box")) return "tube";
+  return "special";
+}
+
+function railFamilyKey(railId: string): string {
+  return railId.replace(/_X\d+_Y\d+_Z\d+(?=_Rail$)/, "");
+}
+
+function railDescriptor(rail: RailConfigItem): string {
+  const noPrefix = railFamilyKey(rail.rowName).replace(/^BP_/, "").replace(/_Rail$/, "");
+  const tokens = noPrefix.split("_").filter(Boolean);
+  const directionTokens = new Set(["F", "L90", "R90", "U90", "D90", "FD", "FU", "FR90", "FL90", "T", "CR"]);
+  const description = tokens
+    .slice(1)
+    .filter((token) => !directionTokens.has(token))
+    .map((token) => token.charAt(0) + token.slice(1).toLowerCase())
+    .join(" ");
+  return description || "Normal";
+}
+
+function compareRailSize(a: RailConfigItem, b: RailConfigItem): number {
+  const volumeA = a.sizeRev.x * a.sizeRev.y * a.sizeRev.z;
+  const volumeB = b.sizeRev.x * b.sizeRev.y * b.sizeRev.z;
+  return volumeA - volumeB || a.sizeRev.x - b.sizeRev.x || a.sizeRev.y - b.sizeRev.y || a.sizeRev.z - b.sizeRev.z || a.rowName.localeCompare(b.rowName);
+}
+
+function buildFamilies(): BuildRailFamily[] {
+  const config = loadConfigFromCsv(csvText);
+  const families = new Map<string, BuildRailFamily>();
+
+  for (const rail of config.values()) {
+    if (rail.isStart) continue;
+    const key = railFamilyKey(rail.rowName);
+    const group = classifyRailGroup(rail);
+    const descriptor = railDescriptor(rail);
+    const family = families.get(key) ?? { key, group, descriptor, variants: [] };
+    family.variants.push(rail);
+    families.set(key, family);
+  }
+
+  return [...families.values()]
+    .map((family) => ({
+      ...family,
+      variants: family.variants.sort(compareRailSize).slice(0, 4),
+    }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+}
+
+function currentBuildFamilies(): BuildRailFamily[] {
+  return buildFamilies().filter((family) => family.group === buildActiveGroup && family.descriptor === buildActiveDescriptor);
+}
+
+function findBuildFamily(familyKey: string): BuildRailFamily | undefined {
+  return buildFamilies().find((family) => family.key === familyKey);
+}
+
+function railForFamilyDisplay(family: BuildRailFamily): RailConfigItem {
+  if (buildSelection?.familyKey === family.key) {
+    return family.variants[Math.min(buildSelection.sizeIndex, family.variants.length - 1)] ?? family.variants[0];
+  }
+  return family.variants[0];
+}
+
+function renderPartLibrary(): void {
+  const families = buildFamilies();
+  const availableGroups = BUILD_GROUPS.filter((group) => families.some((family) => family.group === group.id));
+  if (!availableGroups.some((group) => group.id === buildActiveGroup)) {
+    buildActiveGroup = availableGroups[0]?.id ?? "special";
+  }
+
+  const descriptors = [...new Set(families.filter((family) => family.group === buildActiveGroup).map((family) => family.descriptor))];
+  descriptors.sort((a, b) => (a === "Normal" ? -1 : b === "Normal" ? 1 : a.localeCompare(b)));
+  if (!descriptors.includes(buildActiveDescriptor)) {
+    buildActiveDescriptor = descriptors[0] ?? "Normal";
+  }
+
+  partTabs.innerHTML = availableGroups
+    .map((group) => {
+      const count = families.filter((family) => family.group === group.id).length;
+      return `
+        <button class="part-tab ${buildActiveGroup === group.id ? "is-active" : ""}" data-group="${group.id}" role="tab" aria-selected="${buildActiveGroup === group.id}">
+          ${markLatin(group.label)} <span>${count}</span>
+        </button>
+      `;
+    })
+    .join("");
+
+  descTabs.innerHTML = descriptors
+    .map((descriptor) => {
+      const count = families.filter((family) => family.group === buildActiveGroup && family.descriptor === descriptor).length;
+      return `
+        <button class="desc-tab ${buildActiveDescriptor === descriptor ? "is-active" : ""}" data-desc="${escapeHtml(descriptor)}" role="tab" aria-selected="${buildActiveDescriptor === descriptor}">
+          ${markLatin(descriptor)} <span>${count}</span>
+        </button>
+      `;
+    })
+    .join("");
+
+  const visibleFamilies = currentBuildFamilies();
+  partStrip.innerHTML = visibleFamilies.length > 0
+    ? visibleFamilies
+      .map((family) => {
+        const rail = railForFamilyDisplay(family);
+        const selected = buildSelection?.familyKey === family.key;
+        return `
+          <button class="part-tile ${selected ? "is-selected" : ""}" data-family-key="${escapeHtml(family.key)}" title="${escapeHtml(rail.rowName)}">
+            <span class="part-name">${markLatin(rail.rowName)}</span>
+            <span class="part-meta">${markLatin(`Difficulty ${rail.diffBase}`)}</span>
+            <span class="part-meta">${markLatin(`Exits ${rail.exitsLogic.length}`)}</span>
+          </button>
+        `;
+      })
+      .join("")
+    : `<div class="part-empty">${markLatin("No rails in this group.")}</div>`;
+
+  buildTray.classList.toggle("is-building", buildSelection !== null);
+  buildHint.textContent = buildSelection
+    ? "Hover an open exit. Left click places, R spins, 1-4 switches size, X exits."
+    : "Select a rail to build from open exits.";
+}
+
 function renderRailDetail(rail: RailMeta | null): void {
   if (!rail) {
-    detailContent.innerHTML = `<span class="muted">${markLatin(deleteMode ? "Delete mode: click a rail to delete it." : "Hover a rail in the scene.")}</span>`;
+    const message = buildSelection
+      ? `Build mode: ${buildSelection.railId}. Hover an open exit, R spin, 1-4 size, X exit.`
+      : deleteMode
+        ? "Delete mode: click a rail to delete it."
+        : "Hover a rail in the scene.";
+    detailContent.innerHTML = `<span class="muted">${markLatin(message)}</span>`;
     return;
   }
   detailContent.innerHTML = `
@@ -288,6 +475,15 @@ viewer.onSelect = (rail) => {
 
 viewer.onEdit = (action) => {
   applyRailEdit(action);
+};
+
+viewer.onBuildHover = (target) => {
+  buildHoverTarget = target;
+  updateBuildPreview();
+};
+
+viewer.onBuildPlace = (target) => {
+  placeBuildRail(target);
 };
 
 function readGeneratorStateFromControls(random = Number(createRandomSeed())): GeneratorSeedState {
@@ -324,7 +520,9 @@ function generateLayout(state: GeneratorSeedState): void {
     });
     currentLayout = generator.generate();
     currentLayout.MapMeta.Seed = encodeSeedState(state);
+    buildHoverTarget = null;
     setLayout(currentLayout);
+    updateBuildPreview();
     renderLog(generator.logs);
   } catch (error) {
     logContent.innerHTML = `<div class="log-line fail">${error instanceof Error ? error.message : String(error)}</div>`;
@@ -454,6 +652,235 @@ function recalculateRailGeometry(rail: MazeRailJson): MazeRailJson {
   };
 }
 
+function selectBuildFamily(familyKey: string): void {
+  if (buildSelection?.familyKey === familyKey) {
+    exitBuildMode("Build mode exited.");
+    return;
+  }
+
+  const family = findBuildFamily(familyKey);
+  const railId = family?.variants[0]?.rowName;
+  if (!railId) return;
+
+  buildSelection = { familyKey, railId, sizeIndex: 0, spin: 0 };
+  buildHoverTarget = null;
+  buildPreviewMessage = "Hover an open exit. Left click places, R spins, 1-4 switches size, X exits.";
+  deleteMode = false;
+  selectedRail = null;
+  selectedRailId = null;
+  viewer.selectRail(null);
+  viewer.setBuildMode(true);
+  viewer.setBuildPreview(null);
+  renderRailDetail(null);
+  renderPartLibrary();
+  updateEditorStatus();
+  renderLog([{ kind: "info", message: `Build mode: ${railId}. Hover an open exit, R spins, 1-4 switches size, X exits.` }]);
+}
+
+function exitBuildMode(message?: string): void {
+  if (!buildSelection) return;
+  buildSelection = null;
+  buildHoverTarget = null;
+  buildPreviewMessage = "Select a rail to build from open exits.";
+  viewer.setBuildMode(false);
+  viewer.setBuildPreview(null);
+  renderRailDetail(selectedRail);
+  renderPartLibrary();
+  updateEditorStatus();
+  if (message) renderLog([{ kind: "info", message }]);
+}
+
+function rotateBuildSpin(): void {
+  if (!buildSelection) return;
+  const spinDiffs = buildHoverTarget?.spinDiffs ?? [1, 1, 1, 1];
+  let nextSpin = buildSelection.spin;
+  for (let offset = 1; offset <= 4; offset += 1) {
+    const candidate = (buildSelection.spin + offset) % 4;
+    if ((spinDiffs[candidate] ?? 0) > 0) {
+      nextSpin = candidate;
+      break;
+    }
+  }
+  buildSelection = { ...buildSelection, spin: nextSpin };
+  updateBuildPreview();
+  updateEditorStatus();
+}
+
+function switchBuildSize(slot: number): void {
+  if (!buildSelection) return;
+  const family = findBuildFamily(buildSelection.familyKey);
+  const index = slot - 1;
+  const variant = family?.variants[index];
+  if (!family || !variant) {
+    renderLog([{ kind: "warn", message: `No size slot ${slot} for ${buildSelection.familyKey}.` }]);
+    return;
+  }
+
+  buildSelection = {
+    ...buildSelection,
+    railId: variant.rowName,
+    sizeIndex: index,
+  };
+  buildPreviewMessage = `Size ${slot}/${family.variants.length}: ${variant.rowName}.`;
+  renderRailDetail(null);
+  renderPartLibrary();
+  updateBuildPreview();
+  updateEditorStatus();
+}
+
+function updateBuildPreview(): void {
+  if (!buildSelection) {
+    viewer.setBuildPreview(null);
+    buildPreviewMessage = "Select a rail to build from open exits.";
+    return;
+  }
+
+  if (!buildHoverTarget) {
+    viewer.setBuildPreview(null);
+    buildPreviewMessage = "Hover an open exit to preview placement.";
+    updateEditorStatus();
+    return;
+  }
+
+  const result = createBuildRail(buildHoverTarget);
+  if (!result.rail) {
+    viewer.setBuildPreview(null);
+    buildPreviewMessage = result.reason ?? "This exit cannot accept the selected rail.";
+    updateEditorStatus();
+    return;
+  }
+
+  viewer.setBuildPreview(result.rail);
+  buildPreviewMessage = `Ready at rail ${buildHoverTarget.parentRailId}, exit ${buildHoverTarget.exitIndex}.`;
+  updateEditorStatus();
+}
+
+function createBuildRail(target: BuildExitTarget): { rail: MazeRailJson | null; reason?: string } {
+  if (!buildSelection) return { rail: null, reason: "No rail selected." };
+  const config = loadConfigFromCsv(csvText);
+  const railConfig = config.get(buildSelection.railId);
+  if (!railConfig) return { rail: null, reason: "Selected rail is not in the current CSV." };
+
+  const parent = currentLayout.Rail.find((rail) => rail.Rail_Index === target.parentRailId);
+  if (!parent) return { rail: null, reason: "Parent rail no longer exists." };
+  const parentExit = parent.Exit[target.exitIndex];
+  if (!parentExit || parentExit.IsConnected || parentExit.TargetInstanceID !== -1) {
+    return { rail: null, reason: "Exit is already connected." };
+  }
+  if ((parentExit.SpinDiff?.[buildSelection.spin] ?? 1) <= 0) {
+    return { rail: null, reason: `Spin ${buildSelection.spin * 90} is not allowed on this exit.` };
+  }
+
+  const posRev = vectorFromDict(parentExit.Exit_Pos_Rev);
+  const rotAbs = normalizeRot(composeRotAbs(parentExit.Exit_Rot_Abs, { p: 0, y: 0, r: buildSelection.spin * 90 }));
+  const occupiedTuples = calculateOccupiedCellsWithRotAbs(railConfig.rowName, posRev, railConfig.sizeRev, rotAbs);
+  const occupiedCells = occupiedTuples.map(([x, y, z]) => ({ x, y, z }));
+  const boundsFailure = firstOutOfBoundsCell(occupiedCells);
+  if (boundsFailure) return { rail: null, reason: `Out of bounds at ${formatVec(boundsFailure)}.` };
+
+  const collision = firstCollidingRail(occupiedCells);
+  if (collision !== null) return { rail: null, reason: `Collision with rail ${collision}.` };
+
+  const railIndex = nextRailIndex(currentLayout);
+  const exits = railConfig.exitsLogic.map((exit, index) => {
+    const worldLogicPos = posRev.add(transformByRotAbs(exit.Pos, rotAbs));
+    return {
+      Index: index,
+      Exit_Pos_Rev: worldLogicPos.toDict(),
+      Exit_Pos_Abs: worldDict(worldLogicPos.toDict()),
+      Exit_Rot_Abs: composeRotAbs(rotAbs, exit.LocalRot),
+      Exit_Dir_Abs: exitDirFromLocalRot(rotAbs, exit.LocalRot),
+      SpinDiff: [...exit.SpinDiff],
+      IsConnected: false,
+      TargetInstanceID: -1,
+    };
+  });
+
+  return {
+    rail: {
+      Rail_Index: railIndex,
+      Rail_ID: railConfig.rowName,
+      Pos_Rev: posRev.toDict(),
+      Pos_Abs: worldDict(posRev.toDict()),
+      Rot_Abs: rotAbs,
+      Dir_Abs: exitDirFromLocalRot(rotAbs, { p: 0, y: 0, r: 0 }),
+      Size_Rev: railConfig.sizeRev.toDict(),
+      Occupied_Cells_Rev: occupiedCells,
+      Diff_Base: railConfig.diffBase,
+      Diff_Act: railConfig.diffBase,
+      Prev_Index: parent.Rail_Index,
+      Next_Index: [],
+      Exit: exits,
+    },
+  };
+}
+
+function placeBuildRail(target: BuildExitTarget): void {
+  if (!buildSelection) return;
+  const result = createBuildRail(target);
+  if (!result.rail) {
+    renderLog([{ kind: "warn", message: result.reason ?? "Cannot place selected rail here." }]);
+    return;
+  }
+
+  const next = cloneLayout(currentLayout);
+  const parent = next.Rail.find((rail) => rail.Rail_Index === target.parentRailId);
+  if (!parent) return;
+  const parentExit = parent.Exit[target.exitIndex];
+  parentExit.IsConnected = true;
+  parentExit.TargetInstanceID = result.rail.Rail_Index;
+  if (!parent.Next_Index.includes(result.rail.Rail_Index)) parent.Next_Index.push(result.rail.Rail_Index);
+  next.Rail.push(result.rail);
+  updateLayoutMeta(next);
+  selectedRail = null;
+  selectedRailId = null;
+  buildHoverTarget = null;
+  buildPreviewMessage = `Placed rail ${result.rail.Rail_Index}. Hover another open exit.`;
+  setLayout(next);
+  viewer.setBuildMode(true);
+  viewer.setBuildPreview(null);
+  renderPartLibrary();
+  updateEditorStatus();
+  renderLog([{ kind: "success", message: `Placed ${result.rail.Rail_ID} on rail ${target.parentRailId} exit ${target.exitIndex} with local spin ${buildSelection.spin * 90}.` }]);
+}
+
+function nextRailIndex(layout: MazeLayout): number {
+  return Math.max(-1, ...layout.Rail.map((rail) => rail.Rail_Index)) + 1;
+}
+
+function firstCollidingRail(cells: Vec3Dict[]): number | null {
+  const occupied = new Map<string, number>();
+  currentLayout.Rail.forEach((rail) => {
+    rail.Occupied_Cells_Rev.forEach((cell) => occupied.set(cellKey(cell), rail.Rail_Index));
+  });
+  for (const cell of cells) {
+    const existing = occupied.get(cellKey(cell));
+    if (existing !== undefined) return existing;
+  }
+  return null;
+}
+
+function firstOutOfBoundsCell(cells: Vec3Dict[]): Vec3Dict | null {
+  const bounds = currentBounds();
+  const radius = {
+    x: boundRadius(bounds.x),
+    y: boundRadius(bounds.y),
+    z: boundRadius(bounds.z),
+  };
+  return cells.find((cell) =>
+    cell.x < -radius.x ||
+    cell.x > radius.x ||
+    cell.y < -radius.y ||
+    cell.y > radius.y ||
+    cell.z < -radius.z ||
+    cell.z > radius.z,
+  ) ?? null;
+}
+
+function cellKey(cell: Vec3Dict): string {
+  return `${cell.x},${cell.y},${cell.z}`;
+}
+
 
 function layoutBounds(layout: MazeLayout): { min: Vec3Dict; max: Vec3Dict } {
   const cells = layout.Rail.flatMap((rail) => (rail.Occupied_Cells_Rev.length > 0 ? rail.Occupied_Cells_Rev : [rail.Pos_Rev]));
@@ -563,7 +990,7 @@ function applyRailEdit(action: RailEditAction): void {
   if (action.mode === "move") {
     moveRail(action.railId, axisOffset(action.axis, action.sign, action.amount ?? 1));
   } else {
-    rotateRail(action.railId, action.axis, action.sign);
+    rotateRail(action.railId, action.axis, action.sign, action.amount ?? 1);
   }
 }
 
@@ -587,11 +1014,12 @@ function moveRail(railId: number, offset: Vec3Dict): void {
   renderLog([{ kind: "info", message: `Moved rail ${railId} by (${offset.x}, ${offset.y}, ${offset.z}).` }]);
 }
 
-function rotateRail(railId: number, axis: RailEditAction["axis"], sign: 1 | -1): void {
+function rotateRail(railId: number, axis: RailEditAction["axis"], sign: 1 | -1, amount: number): void {
   const next = cloneLayout(currentLayout);
   const rail = next.Rail.find((item) => item.Rail_Index === railId);
   if (!rail) return;
-  const delta = sign * 90;
+  const steps = Math.max(1, Math.floor(amount));
+  const delta = sign * 90 * steps;
   rail.Rot_Abs = normalizeRot({
     p: rail.Rot_Abs.p + (axis === "y" ? delta : 0),
     y: rail.Rot_Abs.y + (axis === "z" ? delta : 0),
@@ -600,7 +1028,7 @@ function rotateRail(railId: number, axis: RailEditAction["axis"], sign: 1 | -1):
   Object.assign(rail, recalculateRailGeometry(rail));
   updateLayoutMeta(next);
   setLayout(next, railId);
-  renderLog([{ kind: "info", message: `Rotated rail ${railId} ${axis.toUpperCase()}${sign > 0 ? "+" : "-"}90.` }]);
+  renderLog([{ kind: "info", message: `Rotated rail ${railId} ${axis.toUpperCase()}${sign > 0 ? "+" : "-"}${90 * steps}.` }]);
 }
 
 function toggleEditorMode(): void {
@@ -624,16 +1052,43 @@ function toggleDeleteMode(): void {
 }
 
 function updateEditorStatus(): void {
+  if (buildSelection) {
+    const family = findBuildFamily(buildSelection.familyKey);
+    const sizeCount = family?.variants.length ?? 1;
+    editorStatus.textContent = `Build: ${buildSelection.railId} · Size ${buildSelection.sizeIndex + 1}/${sizeCount} · Spin ${buildSelection.spin * 90} · ${buildPreviewMessage} · X exit`;
+    editorStatus.classList.remove("is-delete", "is-rotate");
+    editorStatus.classList.add("is-build");
+    buildHint.textContent = buildPreviewMessage;
+    return;
+  }
+
   const mode = deleteMode ? "Delete" : editorMode === "move" ? "Move" : "Rotate";
   const target = selectedRailId === null ? "No selection" : `Rail ${selectedRailId}`;
   editorStatus.textContent = `Mode: ${mode} · ${target}`;
+  editorStatus.classList.remove("is-build");
   editorStatus.classList.toggle("is-delete", deleteMode);
   editorStatus.classList.toggle("is-rotate", !deleteMode && editorMode === "rotate");
+  buildHint.textContent = "Select a rail to build from open exits.";
 }
 
 function handleEditorKeydown(event: KeyboardEvent): void {
   const target = event.target as HTMLElement | null;
-  if (target?.closest("input, textarea, select, button")) return;
+  if (target?.closest("input, textarea, select")) return;
+  if (buildSelection) {
+    const key = event.key.toLowerCase();
+    if (key === "x" || event.key === "Escape") {
+      event.preventDefault();
+      exitBuildMode("Build mode exited.");
+    } else if (key === "r") {
+      event.preventDefault();
+      rotateBuildSpin();
+    } else if (/^[1-4]$/.test(event.key)) {
+      event.preventDefault();
+      switchBuildSize(Number(event.key));
+    }
+    return;
+  }
+  if (target?.closest("button")) return;
   if (event.key.toLowerCase() === "x") {
     event.preventDefault();
     if (selectedRailId !== null) {
@@ -684,6 +1139,8 @@ function refreshBoundsOnly(): void {
   normalizeBoundInputs();
   viewer.setBounds(currentBounds());
   viewer.setLayout(currentLayout);
+  buildHoverTarget = null;
+  updateBuildPreview();
 }
 
 function normalizeBoundInputs(): void {
@@ -730,6 +1187,8 @@ function handleFile(file: File): void {
       renderLog([{ kind: "info", message: restoredSeed ? `Loaded ${file.name}; restored seed ${restoredSeed}` : `Loaded ${file.name}` }]);
     } else {
       csvText = text;
+      if (buildSelection && !findBuildFamily(buildSelection.familyKey)) exitBuildMode("Build mode exited because the CSV changed.");
+      renderPartLibrary();
       generateFromSeedInput();
     }
   };
@@ -771,6 +1230,24 @@ focusToggleBtn.addEventListener("click", () => {
   }
   updateFocusButton();
 });
+partTabs.addEventListener("click", (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-group]");
+  if (!button) return;
+  buildActiveGroup = button.dataset.group as BuildGroupId;
+  renderPartLibrary();
+});
+descTabs.addEventListener("click", (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-desc]");
+  if (!button) return;
+  buildActiveDescriptor = button.dataset.desc ?? "Normal";
+  renderPartLibrary();
+});
+partStrip.addEventListener("click", (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-family-key]");
+  const familyKey = button?.dataset.familyKey;
+  if (!familyKey) return;
+  selectBuildFamily(familyKey);
+});
 [boundX, boundY, boundZ].forEach((input) => input.addEventListener("input", refreshBoundsOnly));
 window.addEventListener("keydown", handleEditorKeydown);
 viewAxis.addEventListener("click", (event) => {
@@ -791,6 +1268,7 @@ dropZone.addEventListener("drop", (event) => {
 });
 
 updateFocusButton();
+renderPartLibrary();
 updateEditorStatus();
 generateFromSeedInput();
 gsap.from(".panel", { x: -20, opacity: 0, duration: 0.45, ease: "power3.out" });

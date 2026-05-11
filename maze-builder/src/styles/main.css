@@ -483,6 +483,8 @@ button:hover {
   height: 34px;
   display: inline-flex;
   align-items: center;
+  min-width: 0;
+  max-width: min(620px, 48vw);
   padding: 0 12px;
   border: 1px solid #deded8;
   background: #eef7f1;
@@ -491,6 +493,8 @@ button:hover {
   font-weight: 700;
   letter-spacing: 0;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .editor-status.is-rotate {
@@ -502,6 +506,12 @@ button:hover {
   background: #fff0ee;
   color: #a84235;
   border-color: #e7b9b1;
+}
+
+.editor-status.is-build {
+  background: #fff8cf;
+  color: #7a5a00;
+  border-color: #e3cc6b;
 }
 
 .primary-tool {
@@ -542,10 +552,14 @@ button:hover {
   background: transparent;
 }
 
+.viewer.is-building canvas {
+  cursor: crosshair;
+}
+
 .view-axis {
   position: absolute;
   top: 66px;
-  right: 16px;
+  left: 16px;
   z-index: 3;
   display: grid;
   gap: 4px;
@@ -586,11 +600,172 @@ button:hover {
 .log-dock {
   position: absolute;
   right: 16px;
-  bottom: 16px;
+  top: 66px;
   width: min(560px, calc(100% - 32px));
   max-height: 32vh;
   overflow: hidden;
   background: rgba(251, 251, 248, 0.92);
+  border: 1px solid #d9d9d3;
+}
+
+.build-tray {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  z-index: 4;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 32px 28px 28px 96px;
+  gap: 0;
+  overflow: hidden;
+  background: rgba(251, 251, 248, 0.94);
+  border: 1px solid #d9d9d3;
+  box-shadow: 0 10px 30px rgba(44, 50, 48, 0.08);
+}
+
+.build-tray-head {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+  padding: 0 12px;
+  color: #2c3230;
+  border-bottom: 1px solid #deded8;
+  background: rgba(251, 251, 248, 0.96);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.build-tray-head span:last-child {
+  min-width: 0;
+  color: #68706c;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.part-tabs,
+.desc-tabs {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid #deded8;
+  background: #f2f2ee;
+  scrollbar-width: none;
+}
+
+.part-tabs::-webkit-scrollbar,
+.desc-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.part-tab,
+.desc-tab {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: 0 0 auto;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-right: 1px solid #deded8;
+  background: transparent;
+  color: #68706c;
+  font-size: 9px;
+  letter-spacing: 0.6px;
+}
+
+.part-tab span,
+.desc-tab span {
+  color: #9da39f;
+  font-size: 9px;
+}
+
+.part-tab.is-active,
+.part-tab:hover,
+.desc-tab.is-active,
+.desc-tab:hover {
+  color: #2c3230;
+  background: #fff;
+}
+
+.part-strip {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 240px;
+  gap: 8px;
+  align-items: stretch;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 8px;
+  background-image: radial-gradient(#d9d9d3 0.75px, transparent 0.75px);
+  background-size: 16px 16px;
+}
+
+.part-tile {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 14px 14px;
+  gap: 4px;
+  min-width: 0;
+  min-height: 80px;
+  height: 80px;
+  padding: 7px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #d9d9d3;
+  text-align: left;
+  white-space: normal;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.part-tile:hover {
+  border-color: #2c3230;
+  background: #fff;
+}
+
+.part-tile.is-selected {
+  border-color: #2856ff;
+  background: #edf1ff;
+  box-shadow: inset 0 -3px 0 #2856ff;
+}
+
+.part-name {
+  min-width: 0;
+  color: #2c3230;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.part-meta,
+.part-empty {
+  color: #68706c;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.part-empty {
+  display: grid;
+  place-items: center;
+  min-width: 220px;
+  height: 80px;
+  background: rgba(255, 255, 255, 0.86);
   border: 1px solid #d9d9d3;
 }
 
@@ -668,7 +843,18 @@ button:hover {
 
   .topbar {
     min-height: 52px;
-    overflow: hidden;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  .topbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .editor-status {
+    max-width: 180px;
+    flex: 0 0 auto;
   }
 
   .tool-chip {
@@ -681,8 +867,21 @@ button:hover {
   .log-dock {
     left: 12px;
     right: 12px;
-    bottom: 12px;
+    top: 64px;
+    bottom: auto;
     width: auto;
     max-height: 24vh;
+  }
+
+  .build-tray {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 30px 26px 26px 92px;
+  }
+
+  .part-strip {
+    grid-auto-columns: 210px;
   }
 }

@@ -1,6 +1,6 @@
 # Repository Progress
 
-Last updated: 2026-05-10
+Last updated: 2026-05-11
 
 ## Scope
 
@@ -15,6 +15,7 @@ This repository is organized as a small suite of independent tools. Directory pr
 | `ue-json-rail-exporter` | Usable | Exports rail and environment helper actors from the current UE level to Maze Builder-compatible JSON. |
 | `ue-json-rail-importer` | Usable | Imports Maze Builder JSON into UE and can fall back from Blueprint references to Static Mesh references. |
 | `ue-asset-pivot-editor` | Usable | Bakes Static Mesh Pivot changes and can compensate selected level actors. |
+| `ue-material-instance-creator` | New / Usable | Creates Material Instances in the active Content Browser path from selected Materials using a fixed parent Material reference. |
 | `ue-texture-assigner` | Usable | Scans UE assets by naming convention and assigns Texture -> MI -> Static Mesh. |
 | `blender-voxel-ball-shatter` | New / Usable | Blender script that converts selected mesh objects into voxel cube collections. |
 

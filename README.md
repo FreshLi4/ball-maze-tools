@@ -11,6 +11,7 @@ Ball Maze Tools 是为 Ball Maze / 迷宫球项目准备的一组开发辅助工
 | JSON Rail Exporter | Unreal Editor Python | 从 UE 关卡导出 rail JSON | [`ue-json-rail-exporter/README.md`](ue-json-rail-exporter/README.md) |
 | JSON Rail Importer | Unreal Editor Python | 将 maze JSON 导入 UE 关卡 | [`ue-json-rail-importer/README.md`](ue-json-rail-importer/README.md) |
 | Asset Pivot Editor | Unreal Editor Python | 批量烘焙 Static Mesh Pivot | [`ue-asset-pivot-editor/README.md`](ue-asset-pivot-editor/README.md) |
+| Material Instance Creator | Unreal Editor Python | 在当前 Content Browser 路径按选中 Material 批量创建材质实例 | [`ue-material-instance-creator/README.md`](ue-material-instance-creator/README.md) |
 | Texture Assigner | Unreal Editor Python | 按命名规范自动绑定贴图、材质实例和 Static Mesh | [`ue-texture-assigner/README.md`](ue-texture-assigner/README.md) |
 | Voxel Ball Shatter | Blender Python | 将选中 Mesh 转为体素小方块集合 | [`blender-voxel-ball-shatter/README.md`](blender-voxel-ball-shatter/README.md) |
 

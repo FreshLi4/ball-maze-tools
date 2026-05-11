@@ -43,11 +43,9 @@ RANDOM_SEED = 12345
 # separate 模式参数：目标块数。
 # ============================================================
 
-# 2 = 竖向对开。
-# 4 = 2 个竖向分区 x 2 个横向分区。
-# 6 = 3 个竖向分区 x 2 个横向分区。
-# 8 = 4 个竖向分区 x 2 个横向分区。
-# 更高 = 以此类推，优先以更均匀的模式切分。
+# 脚本会把目标数量分解成尽量接近正方体的三维网格。
+# 例如 2 -> 2x1x1，4 -> 2x2x1，6 -> 3x2x1，
+# 8 -> 2x2x2，9 -> 3x3x1，64 -> 4x4x4。
 # 奇数会先按奇数 + 1 分区，再随机合并一对相邻分区。
 SEPARATE_TARGET_BLOCKS = 64
 SEPARATE_RANDOM_SEED = 12345
@@ -1165,11 +1163,67 @@ def separate_base_count(target_count):
 
     return target_count
 
-def separate_grid_shape(base_count):
-    if base_count <= 2:
-        return base_count, 1
+def factor_triplets(n):
+    n = max(1, int(n))
 
-    return max(1, base_count // 2), 2
+    for x in range(1, int(round(n ** (1.0 / 3.0))) + 3):
+        if x <= 0 or n % x != 0:
+            continue
+
+        rem = n // x
+
+        for y in range(x, int(math.sqrt(rem)) + 2):
+            if rem % y != 0:
+                continue
+
+            z = rem // y
+
+            if z < y:
+                continue
+
+            yield (z, y, x)
+
+def separate_grid_shape(base_count, bounds_size):
+    bounds = [
+        max(float(bounds_size.x), EPSILON),
+        max(float(bounds_size.y), EPSILON),
+        max(float(bounds_size.z), EPSILON),
+    ]
+    axis_order = sorted(range(3), key=lambda axis: bounds[axis], reverse=True)
+    best_shape = (base_count, 1, 1)
+    best_score = None
+    seen = set()
+
+    for factors in factor_triplets(base_count):
+        if factors in seen:
+            continue
+        seen.add(factors)
+
+        shape = [1, 1, 1]
+
+        for factor_index, axis in enumerate(axis_order):
+            shape[axis] = factors[factor_index]
+
+        cell_sizes = [
+            bounds[axis] / shape[axis]
+            for axis in range(3)
+        ]
+        largest_cell = max(cell_sizes)
+        smallest_cell = max(min(cell_sizes), EPSILON)
+        factor_spread = max(factors) / max(min(factors), 1)
+        score = (
+            largest_cell / smallest_cell,
+            factor_spread,
+            sum((size - sum(cell_sizes) / 3.0) ** 2 for size in cell_sizes),
+            -min(factors),
+            factors,
+        )
+
+        if best_score is None or score < best_score:
+            best_score = score
+            best_shape = tuple(shape)
+
+    return best_shape
 
 def polygon_center(mesh, poly):
     center = Vector((0.0, 0.0, 0.0))
@@ -1182,47 +1236,48 @@ def polygon_center(mesh, poly):
 
     return center
 
-def separate_partition_index(center, mesh_center, min_z, max_z, vertical_parts, horizontal_parts):
-    if vertical_parts <= 1:
-        vertical_index = 0
-    else:
-        angle = math.atan2(center.y - mesh_center.y, center.x - mesh_center.x)
-        angle = (angle + math.tau) % math.tau
-        vertical_index = int(angle / math.tau * vertical_parts)
-        vertical_index = min(vertical_parts - 1, max(0, vertical_index))
+def separate_axis_index(value, min_value, max_value, parts):
+    if parts <= 1 or abs(max_value - min_value) < EPSILON:
+        return 0
 
-    if horizontal_parts <= 1 or abs(max_z - min_z) < EPSILON:
-        horizontal_index = 0
-    else:
-        z_ratio = (center.z - min_z) / (max_z - min_z)
-        horizontal_index = int(z_ratio * horizontal_parts)
-        horizontal_index = min(horizontal_parts - 1, max(0, horizontal_index))
+    ratio = (value - min_value) / (max_value - min_value)
+    index = int(ratio * parts)
+    return min(parts - 1, max(0, index))
 
-    return horizontal_index * vertical_parts + vertical_index
+def separate_partition_index(center, min_co, max_co, grid_shape):
+    ix = separate_axis_index(center.x, min_co.x, max_co.x, grid_shape[0])
+    iy = separate_axis_index(center.y, min_co.y, max_co.y, grid_shape[1])
+    iz = separate_axis_index(center.z, min_co.z, max_co.z, grid_shape[2])
 
-def adjacent_separate_pairs(vertical_parts, horizontal_parts):
+    return ix + iy * grid_shape[0] + iz * grid_shape[0] * grid_shape[1]
+
+def adjacent_separate_pairs(grid_shape):
     pairs = []
+    sx, sy, sz = grid_shape
 
-    for h in range(horizontal_parts):
-        for v in range(vertical_parts):
-            index = h * vertical_parts + v
+    for iz in range(sz):
+        for iy in range(sy):
+            for ix in range(sx):
+                index = ix + iy * sx + iz * sx * sy
 
-            if vertical_parts > 1:
-                next_v = (v + 1) % vertical_parts
-                pairs.append((index, h * vertical_parts + next_v))
+                if ix + 1 < sx:
+                    pairs.append((index, index + 1))
 
-            if h + 1 < horizontal_parts:
-                pairs.append((index, (h + 1) * vertical_parts + v))
+                if iy + 1 < sy:
+                    pairs.append((index, index + sx))
+
+                if iz + 1 < sz:
+                    pairs.append((index, index + sx * sy))
 
     return pairs
 
-def merge_random_adjacent_partitions(partitions, target_count, vertical_parts, horizontal_parts):
+def merge_random_adjacent_partitions(partitions, target_count, grid_shape):
     rng = random.Random(SEPARATE_RANDOM_SEED)
 
     while len(partitions) > target_count:
         available_indices = set(partitions.keys())
         pairs = [
-            pair for pair in adjacent_separate_pairs(vertical_parts, horizontal_parts)
+            pair for pair in adjacent_separate_pairs(grid_shape)
             if pair[0] in available_indices and pair[1] in available_indices
         ]
 
@@ -1243,20 +1298,17 @@ def merge_random_adjacent_partitions(partitions, target_count, vertical_parts, h
 def build_separate_partitions(mesh):
     target_count = max(1, int(SEPARATE_TARGET_BLOCKS))
     base_count = separate_base_count(target_count)
-    vertical_parts, horizontal_parts = separate_grid_shape(base_count)
     min_co, max_co = get_bounds(mesh)
-    mesh_center = (min_co + max_co) * 0.5
+    grid_shape = separate_grid_shape(base_count, max_co - min_co)
     partitions = {i: [] for i in range(base_count)}
 
     for poly in mesh.polygons:
         center = polygon_center(mesh, poly)
         index = separate_partition_index(
             center,
-            mesh_center,
-            min_co.z,
-            max_co.z,
-            vertical_parts,
-            horizontal_parts,
+            min_co,
+            max_co,
+            grid_shape,
         )
         partitions[index].append(poly.index)
 
@@ -1270,8 +1322,7 @@ def build_separate_partitions(mesh):
         merge_random_adjacent_partitions(
             partitions,
             target_count,
-            vertical_parts,
-            horizontal_parts,
+            grid_shape,
         )
 
     result = [
@@ -1281,7 +1332,7 @@ def build_separate_partitions(mesh):
 
     print(
         f"Separate partitions: {len(result)} "
-        f"(target {target_count}, grid {vertical_parts}x{horizontal_parts})"
+        f"(target {target_count}, grid {grid_shape[0]}x{grid_shape[1]}x{grid_shape[2]})"
     )
     return result
 

@@ -49,7 +49,7 @@ This script cannot run in normal system Python because it imports `bpy` and Blen
 - `RANDOM_MERGE_LEVEL_MIN`: lower bound of random target side length.
 - `RANDOM_MERGE_LEVEL_MAX`: upper bound of random target side length.
 - `RANDOM_SEED`: makes randomized merging repeatable.
-- `SEPARATE_TARGET_BLOCKS`: target number of pieces for `separate` mode.
+- `SEPARATE_TARGET_BLOCKS`: target number of pieces for `separate` mode. The script decomposes this into a near-cubic 3D grid.
 - `SEPARATE_RANDOM_SEED`: controls which adjacent pair is merged when `SEPARATE_TARGET_BLOCKS` is odd.
 - `AXIS_NORMAL_THRESHOLD`: ignores faces that are not close to axis-aligned.
 
@@ -66,12 +66,12 @@ Merge priority is:
 3. full occupancy arbitrary connected shape within target size,
 4. downgrade target side length until `1x1x1`.
 
-Separate mode does not voxelize the asset. It assigns each original polygon to one spatial partition by polygon center, then creates one mesh object per partition using the original polygon vertices, material indices, UVs, and Color Attributes. Because it does not boolean-cut geometry, the split boundary stays open and no new cap faces are generated.
+Separate mode does not voxelize the asset. It assigns each original polygon to one axis-aligned bounding-box grid partition by polygon center, then creates one mesh object per partition using the original polygon vertices, material indices, UVs, and Color Attributes. Because it does not boolean-cut geometry, the split boundary stays open and no new cap faces are generated.
 
 Separate partitioning uses this layout:
 
-1. `2`: two vertical sectors.
-2. `4`: two vertical sectors and two horizontal layers.
-3. `6`: three vertical sectors and two horizontal layers.
-4. `8`: four vertical sectors and two horizontal layers.
-5. odd targets: build the next even layout, then merge one random adjacent pair.
+1. Find integer factors `A x B x C = target`.
+2. Prefer the factor triplet whose resulting cell sizes are closest to cube-like for the source object's bounding box.
+3. Assign larger factors to longer object axes, so elongated objects still get less stretched cells.
+4. Examples for near-cubic assets: `2 -> 2x1x1`, `4 -> 2x2x1`, `6 -> 3x2x1`, `8 -> 2x2x2`, `9 -> 3x3x1`, `64 -> 4x4x4`.
+5. Odd targets build the next even layout, then merge one random adjacent pair.

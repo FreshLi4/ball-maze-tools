@@ -1295,6 +1295,93 @@ def merge_random_adjacent_partitions(partitions, target_count, grid_shape):
         partitions[keep].extend(partitions[remove])
         del partitions[remove]
 
+def split_separate_partition(mesh, poly_indices):
+    if len(poly_indices) <= 1:
+        return None
+
+    centers = [
+        (poly_index, polygon_center(mesh, mesh.polygons[poly_index]))
+        for poly_index in poly_indices
+    ]
+    spreads = []
+
+    for axis in range(3):
+        values = [center[axis] for _, center in centers]
+        spreads.append(max(values) - min(values))
+
+    split_axis = max(range(3), key=lambda axis: spreads[axis])
+
+    if spreads[split_axis] < EPSILON:
+        split_axis = max(
+            range(3),
+            key=lambda axis: len(set(round_f(center[axis]) for _, center in centers))
+        )
+
+    centers.sort(
+        key=lambda item: (
+            item[1][split_axis],
+            item[1][(split_axis + 1) % 3],
+            item[1][(split_axis + 2) % 3],
+            item[0],
+        )
+    )
+
+    split_at = len(centers) // 2
+
+    if split_at <= 0 or split_at >= len(centers):
+        return None
+
+    first = [poly_index for poly_index, _ in centers[:split_at]]
+    second = [poly_index for poly_index, _ in centers[split_at:]]
+
+    if not first or not second:
+        return None
+
+    return first, second
+
+def partition_split_score(mesh, poly_indices):
+    if len(poly_indices) <= 1:
+        return (0, 0.0)
+
+    centers = [
+        polygon_center(mesh, mesh.polygons[poly_index])
+        for poly_index in poly_indices
+    ]
+    spreads = []
+
+    for axis in range(3):
+        values = [center[axis] for center in centers]
+        spreads.append(max(values) - min(values))
+
+    return (len(poly_indices), max(spreads))
+
+def split_partitions_to_target(mesh, partitions, target_count):
+    next_index = max(partitions.keys(), default=-1) + 1
+
+    while len(partitions) < target_count:
+        splittable = [
+            (index, poly_indices)
+            for index, poly_indices in partitions.items()
+            if len(poly_indices) > 1
+        ]
+
+        if not splittable:
+            break
+
+        index, poly_indices = max(
+            splittable,
+            key=lambda item: partition_split_score(mesh, item[1])
+        )
+        split = split_separate_partition(mesh, poly_indices)
+
+        if split is None:
+            break
+
+        first, second = split
+        partitions[index] = first
+        partitions[next_index] = second
+        next_index += 1
+
 def build_separate_partitions(mesh):
     target_count = max(1, int(SEPARATE_TARGET_BLOCKS))
     base_count = separate_base_count(target_count)
@@ -1324,6 +1411,9 @@ def build_separate_partitions(mesh):
             target_count,
             grid_shape,
         )
+
+    if len(partitions) < target_count:
+        split_partitions_to_target(mesh, partitions, target_count)
 
     result = [
         tuple(poly_indices)

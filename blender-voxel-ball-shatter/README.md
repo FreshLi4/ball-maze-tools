@@ -75,3 +75,4 @@ Separate partitioning uses this layout:
 3. Assign larger factors to longer object axes, so elongated objects still get less stretched cells.
 4. Examples for near-cubic assets: `2 -> 2x1x1`, `4 -> 2x2x1`, `6 -> 3x2x1`, `8 -> 2x2x2`, `9 -> 3x3x1`, `64 -> 4x4x4`.
 5. Odd targets build the next even layout, then merge one random adjacent pair.
+6. If curved assets leave empty bounding-box cells, the largest populated partitions are split again until the target object count is reached when possible.

@@ -11,7 +11,7 @@ Blender Python script for converting selected mesh objects into voxel cube colle
 - Can fill the volume with scanlines, then keep only the outer layer.
 - Can merge unit voxels into larger non-overlapping cuboid blocks.
 - Can randomize merged block sizes within a configured size range.
-- Can split the original mesh into separate objects without creating new cut faces.
+- Can split the original mesh into separate objects without filling hollow assets.
 - Can use the evaluated mesh after modifiers.
 - Preserves material slots, UV layers, and mesh Color Attributes / vertex colors used by material nodes.
 - Creates the shattered collection under the source object's collection.
@@ -66,7 +66,7 @@ Merge priority is:
 3. full occupancy arbitrary connected shape within target size,
 4. downgrade target side length until `1x1x1`.
 
-Separate mode does not voxelize the asset. It assigns each original polygon to one axis-aligned bounding-box grid partition by polygon center, then creates one mesh object per partition using the original polygon vertices, material indices, UVs, and Color Attributes. Because it does not boolean-cut geometry, the split boundary stays open and no new cap faces are generated.
+Separate mode does not voxelize or fill the asset. It assigns each original polygon to one axis-aligned bounding-box grid partition by polygon center, then creates one mesh object per partition using the original polygon vertices, material indices, UVs, and Color Attributes. Hollow assets stay hollow, and any existing internal faces or internal textures are copied from the source mesh instead of being reconstructed.
 
 Separate partitioning uses this layout:
 
@@ -75,4 +75,4 @@ Separate partitioning uses this layout:
 3. Assign larger factors to longer object axes, so elongated objects still get less stretched cells.
 4. Examples for near-cubic assets: `2 -> 2x1x1`, `4 -> 2x2x1`, `6 -> 3x2x1`, `8 -> 2x2x2`, `9 -> 3x3x1`, `64 -> 4x4x4`.
 5. Odd targets build the next even layout, then merge one random adjacent pair.
-6. If curved assets leave empty bounding-box cells, the largest populated partitions are split again until the target object count is reached when possible.
+6. If curved assets leave empty bounding-box cells, the largest populated surface partitions are split again until the target object count is reached when possible.

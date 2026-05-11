@@ -15,7 +15,7 @@ from mathutils.geometry import tessellate_polygon
 
 # 0 = merge：按 MERGE_LEVEL 合并体素块。
 # 1 = random：在随机尺寸范围内合并体素块。
-# 2 = separate：不体素化，不切新面，只沿原有顶点/面把原资产分成若干块。
+# 2 = separate：直接按原始 mesh 面分区；空壳和已有内部贴图会按原样保留。
 SHATTER_MODE = 2
 
 # ============================================================

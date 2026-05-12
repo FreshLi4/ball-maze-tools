@@ -70,6 +70,9 @@ export class MazeViewer {
   private pointerState: PointerState | null = null;
   private lastHoveredId: number | null = null;
   private buildHoveredExitKey: string | null = null;
+  private buildWheelAccum = 0;
+  private buildWheelLocked = false;
+  private buildWheelUnlockTimer: number | undefined;
   private selectedId: number | null = null;
   private highlightedMarkers: THREE.Object3D[] = [];
   private activeLayout?: MazeLayout;
@@ -78,6 +81,8 @@ export class MazeViewer {
   private focusHistoryIndex = 0;
   private projectionMode: "perspective" | "orthographic" = "perspective";
   private readonly orthoHeight = 260;
+  private readonly buildWheelThreshold = 180;
+  private readonly buildWheelUnlockMs = 420;
   onHover?: (rail: RailMeta | null) => void;
   onSelect?: (rail: RailMeta | null) => void;
   onEdit?: (action: RailEditAction) => void;
@@ -118,6 +123,7 @@ export class MazeViewer {
     this.renderer.domElement.removeEventListener("pointerup", this.handlePointerUp);
     this.renderer.domElement.removeEventListener("pointercancel", this.handlePointerCancel);
     this.renderer.domElement.removeEventListener("wheel", this.handleWheel);
+    this.resetBuildWheel();
     window.removeEventListener("resize", this.resize);
     this.renderer.dispose();
     this.host.innerHTML = "";
@@ -165,6 +171,7 @@ export class MazeViewer {
     } else {
       this.setBuildExitHover(null);
       this.clearBuildPreview();
+      this.resetBuildWheel();
     }
     this.refreshEditGizmo();
   }
@@ -821,11 +828,33 @@ export class MazeViewer {
   };
 
   private handleWheel = (event: WheelEvent): void => {
-    if (!this.buildMode) return;
-    const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+    if (!this.buildMode || this.buildHoveredExitKey === null) return;
+    const rawDelta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+    const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? 16
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+        ? 120
+        : 1;
+    const delta = rawDelta * unit;
     if (delta === 0) return;
     event.preventDefault();
-    this.onBuildSizeCycle?.(delta > 0 ? 1 : -1);
+    if (this.buildWheelLocked) return;
+
+    const nextAccum = Math.sign(this.buildWheelAccum) === Math.sign(delta)
+      ? this.buildWheelAccum + delta
+      : delta;
+    this.buildWheelAccum = nextAccum;
+    if (Math.abs(this.buildWheelAccum) < this.buildWheelThreshold) return;
+
+    this.onBuildSizeCycle?.(this.buildWheelAccum > 0 ? 1 : -1);
+    this.buildWheelAccum = 0;
+    this.buildWheelLocked = true;
+    if (this.buildWheelUnlockTimer !== undefined) window.clearTimeout(this.buildWheelUnlockTimer);
+    this.buildWheelUnlockTimer = window.setTimeout(() => {
+      this.buildWheelLocked = false;
+      this.buildWheelAccum = 0;
+      this.buildWheelUnlockTimer = undefined;
+    }, this.buildWheelUnlockMs);
   };
 
   private pickEditAction(event: MouseEvent): RailEditAction | null {
@@ -943,12 +972,22 @@ export class MazeViewer {
   private setBuildExitHover(target: BuildExitTarget | null): void {
     const key = target ? this.exitKey(target.parentRailId, target.exitIndex) : null;
     if (this.buildHoveredExitKey === key) return;
+    this.resetBuildWheel();
     if (this.buildHoveredExitKey) {
       this.exitMarkerMap.get(this.buildHoveredExitKey)?.scale.setScalar(1);
     }
     this.buildHoveredExitKey = key;
     if (key) {
       this.exitMarkerMap.get(key)?.scale.setScalar(1.72);
+    }
+  }
+
+  private resetBuildWheel(): void {
+    this.buildWheelAccum = 0;
+    this.buildWheelLocked = false;
+    if (this.buildWheelUnlockTimer !== undefined) {
+      window.clearTimeout(this.buildWheelUnlockTimer);
+      this.buildWheelUnlockTimer = undefined;
     }
   }
 

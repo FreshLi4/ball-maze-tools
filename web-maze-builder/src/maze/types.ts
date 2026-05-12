@@ -21,6 +21,7 @@ export interface ExitLogic {
 
 export interface RailConfigItem {
   rowName: string;
+  displayName?: string;
   cnName?: string;
   enName?: string;
   diffBase: number;

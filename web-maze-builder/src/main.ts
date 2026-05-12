@@ -215,8 +215,8 @@ app.innerHTML = `
 
     <section class="viewport">
       <header class="topbar">
-        <button id="historyBackBtn" class="tool-chip icon-tool" title="返回上一个相机 focus。" aria-label="返回上一个相机 focus。">←</button>
-        <button id="historyForwardBtn" class="tool-chip icon-tool" title="前进到下一个相机 focus。" aria-label="前进到下一个相机 focus。">→</button>
+        <button id="historyBackBtn" class="tool-chip icon-tool" title="撤销上一步编辑。" aria-label="撤销上一步编辑。">←</button>
+        <button id="historyForwardBtn" class="tool-chip icon-tool" title="重做下一步编辑。" aria-label="重做下一步编辑。">→</button>
         <span id="editorStatus" class="editor-status">Mode: Move</span>
         <div class="view-tools">
           <button id="projectionToggleBtn" class="tool-chip" title="在透视和无透视视图之间切换。">透视</button>
@@ -308,6 +308,16 @@ let buildActiveDescriptor = "Normal";
 let buildPreviewMessage = "Select a rail to build from open exits.";
 let seedInputTimer: number | undefined;
 
+interface LayoutHistorySnapshot {
+  layout: MazeLayout;
+  bounds: Vec3Dict;
+  selectedRailId: number | null;
+  seed: string;
+}
+
+let layoutHistory: LayoutHistorySnapshot[] = [];
+let layoutHistoryIndex = -1;
+
 function markLatin(text: string): string {
   const escape = (value: string) => value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
   return escape(text).replace(/[A-Za-z0-9_.:/()+,-]+/g, (match) => `<span class="latin">${match}</span>`);
@@ -319,8 +329,8 @@ function escapeHtml(text: string): string {
 
 function railDisplayName(rail: RailConfigItem): string {
   return currentLanguage === "en"
-    ? rail.enName || rail.cnName || rail.rowName
-    : rail.cnName || rail.enName || rail.rowName;
+    ? rail.enName || rail.displayName || rail.cnName || rail.rowName
+    : rail.cnName || rail.displayName || rail.enName || rail.rowName;
 }
 
 function railDisplayNameById(railId: string): string {
@@ -336,10 +346,19 @@ function familySizeValues(family: BuildRailFamily): number[] {
   return [...new Set(family.variants.map(railSizeValue))].sort((a, b) => a - b);
 }
 
-function familySizeLabel(family: BuildRailFamily, activeRail: RailConfigItem): string {
+function familySizeText(family: BuildRailFamily, activeRail: RailConfigItem): string {
   const active = railSizeValue(activeRail);
-  const available = familySizeValues(family);
-  return `Size ${active}${available.length > 1 ? ` / ${available.join("/")}` : ""}`;
+  return `Size ${active}`;
+}
+
+function familySizeOptionsMarkup(family: BuildRailFamily, activeRail: RailConfigItem): string {
+  const activeIndex = family.variants.findIndex((rail) => rail.rowName === activeRail.rowName);
+  return family.variants
+    .map((rail, index) => {
+      const active = index === activeIndex;
+      return `<span class="size-option ${active ? "is-active" : ""}">${markLatin(String(railSizeValue(rail)))}</span>`;
+    })
+    .join(`<span class="size-separator">${markLatin("/")}</span>`);
 }
 
 function classifyRailGroup(rail: RailConfigItem): BuildGroupId {
@@ -450,13 +469,13 @@ function renderPartLibrary(): void {
         const rail = railForFamilyDisplay(family);
         const selected = buildSelection?.familyKey === family.key;
         const displayName = railDisplayName(rail);
-        const sizeLabel = familySizeLabel(family, rail);
+        const sizeOptions = familySizeOptionsMarkup(family, rail);
         return `
           <button class="part-tile ${selected ? "is-selected" : ""}" data-family-key="${escapeHtml(family.key)}" title="${escapeHtml(rail.rowName)}">
             <span class="part-name">${markLatin(displayName)}</span>
             <span class="part-meta">${markLatin(`Difficulty ${rail.diffBase}`)}</span>
             <span class="part-meta">${markLatin(`Exits ${rail.exitsLogic.length}`)}</span>
-            <span class="part-meta part-size">${markLatin(sizeLabel)}</span>
+            <span class="part-meta part-size">${markLatin("Size ")}${sizeOptions}</span>
           </button>
         `;
       })
@@ -559,6 +578,7 @@ function generateLayout(state: GeneratorSeedState): void {
     currentLayout.MapMeta.Seed = encodeSeedState(state);
     buildHoverTarget = null;
     setLayout(currentLayout);
+    resetLayoutHistory(currentLayout, null);
     updateBuildPreview();
     renderLog(generator.logs);
   } catch (error) {
@@ -582,12 +602,12 @@ function regenerateWithCurrentConfig(): void {
   generateLayout(state);
 }
 
-function setLayout(layout: MazeLayout, keepSelectedId: number | null = null): void {
+function setLayout(layout: MazeLayout, keepSelectedId: number | null = null, animate = keepSelectedId === null): void {
   currentLayout = layout;
   selectedRailId = keepSelectedId !== null && layout.Rail.some((rail) => rail.Rail_Index === keepSelectedId) ? keepSelectedId : null;
   selectedRail = selectedRailId !== null ? railMetaFromLayout(layout, selectedRailId) : null;
   viewer.setBounds(currentBounds());
-  viewer.setLayout(layout, selectedRailId, keepSelectedId === null);
+  viewer.setLayout(layout, selectedRailId, animate);
   renderRailDetail(selectedRail);
   updateEditorStatus();
   statsContent.innerHTML = `
@@ -601,6 +621,71 @@ function setLayout(layout: MazeLayout, keepSelectedId: number | null = null): vo
       .map((diff, index) => `<div class="segment-stat"><span>${markLatin(`Segment ${index + 1}`)}</span><strong>${markLatin(diff.toFixed(2))}</strong></div>`)
       .join("")}
   `;
+  updateHistoryButtons();
+}
+
+function captureHistorySnapshot(layout = currentLayout, keepSelectedId = selectedRailId): LayoutHistorySnapshot {
+  return {
+    layout: cloneLayout(layout),
+    bounds: currentBounds(),
+    selectedRailId: keepSelectedId,
+    seed: seedInput.value,
+  };
+}
+
+function resetLayoutHistory(layout = currentLayout, keepSelectedId: number | null = selectedRailId): void {
+  layoutHistory = [captureHistorySnapshot(layout, keepSelectedId)];
+  layoutHistoryIndex = 0;
+  updateHistoryButtons();
+}
+
+function commitLayout(layout: MazeLayout, keepSelectedId: number | null = null): void {
+  const snapshot: LayoutHistorySnapshot = {
+    layout: cloneLayout(layout),
+    bounds: currentBounds(),
+    selectedRailId: keepSelectedId,
+    seed: seedInput.value,
+  };
+  layoutHistory = layoutHistory.slice(0, layoutHistoryIndex + 1);
+  layoutHistory.push(snapshot);
+  layoutHistoryIndex = layoutHistory.length - 1;
+  setLayout(cloneLayout(layout), keepSelectedId, false);
+}
+
+function applyHistorySnapshot(snapshot: LayoutHistorySnapshot): void {
+  seedInput.value = snapshot.seed;
+  boundX.value = String(snapshot.bounds.x);
+  boundY.value = String(snapshot.bounds.y);
+  boundZ.value = String(snapshot.bounds.z);
+  buildHoverTarget = null;
+  currentLayout = cloneLayout(snapshot.layout);
+  setLayout(currentLayout, snapshot.selectedRailId, false);
+  updateBuildPreview();
+}
+
+function undoLayoutEdit(): void {
+  if (layoutHistoryIndex <= 0) return;
+  layoutHistoryIndex -= 1;
+  applyHistorySnapshot(layoutHistory[layoutHistoryIndex]);
+  renderLog([{ kind: "info", message: "Undo." }]);
+}
+
+function redoLayoutEdit(): void {
+  if (layoutHistoryIndex >= layoutHistory.length - 1) return;
+  layoutHistoryIndex += 1;
+  applyHistorySnapshot(layoutHistory[layoutHistoryIndex]);
+  renderLog([{ kind: "info", message: "Redo." }]);
+}
+
+function updateHistoryButtons(): void {
+  const canUndo = layoutHistoryIndex > 0;
+  const canRedo = layoutHistoryIndex >= 0 && layoutHistoryIndex < layoutHistory.length - 1;
+  historyBackBtn.disabled = !canUndo;
+  historyForwardBtn.disabled = !canRedo;
+  historyBackBtn.title = canUndo ? "撤销上一步编辑。" : "没有可撤销的编辑。";
+  historyForwardBtn.title = canRedo ? "重做下一步编辑。" : "没有可重做的编辑。";
+  historyBackBtn.setAttribute("aria-label", historyBackBtn.title);
+  historyForwardBtn.setAttribute("aria-label", historyForwardBtn.title);
 }
 
 function railMetaFromLayout(layout: MazeLayout, railId: number): RailMeta | null {
@@ -712,7 +797,7 @@ function selectBuildFamily(familyKey: string): void {
   renderRailDetail(null);
   renderPartLibrary();
   updateEditorStatus();
-  renderLog([{ kind: "info", message: `Build mode: ${railDisplayName(rail)} (${familySizeLabel(family, rail)}). Hover an open exit, wheel/1-4 switches size, R spins, X exits.` }]);
+  renderLog([{ kind: "info", message: `Build mode: ${railDisplayName(rail)} (${familySizeText(family, rail)}). Hover an open exit, wheel/1-4 switches size, R spins, X exits.` }]);
 }
 
 function exitBuildMode(message?: string): void {
@@ -759,7 +844,7 @@ function switchBuildSize(slot: number): void {
     railId: variant.rowName,
     sizeIndex: index,
   };
-  buildPreviewMessage = `${familySizeLabel(family, variant)} · ${railDisplayName(variant)}.`;
+  buildPreviewMessage = `${familySizeText(family, variant)} · ${railDisplayName(variant)}.`;
   renderRailDetail(null);
   renderPartLibrary();
   updateBuildPreview();
@@ -770,7 +855,8 @@ function cycleBuildSize(direction: 1 | -1): void {
   if (!buildSelection) return;
   const family = findBuildFamily(buildSelection.familyKey);
   if (!family || family.variants.length <= 1) return;
-  const nextIndex = (buildSelection.sizeIndex + direction + family.variants.length) % family.variants.length;
+  const nextIndex = buildSelection.sizeIndex + direction;
+  if (nextIndex < 0 || nextIndex >= family.variants.length) return;
   switchBuildSize(nextIndex + 1);
 }
 
@@ -882,7 +968,7 @@ function placeBuildRail(target: BuildExitTarget): void {
   selectedRailId = null;
   buildHoverTarget = null;
   buildPreviewMessage = `Placed rail ${result.rail.Rail_Index}. Hover another open exit.`;
-  setLayout(next);
+  commitLayout(next);
   viewer.setBuildMode(true);
   viewer.setBuildPreview(null);
   renderPartLibrary();
@@ -992,7 +1078,7 @@ function translateLayout(layout: MazeLayout, offset: Vec3Dict): MazeLayout {
 
 function moveLayoutToCenter(): void {
   const offset = centerOffsetForBounds(currentLayout, currentBounds());
-  setLayout(translateLayout(currentLayout, offset));
+  commitLayout(translateLayout(currentLayout, offset));
   renderLog([{ kind: "info", message: `Moved layout by grid offset (${offset.x}, ${offset.y}, ${offset.z}).` }]);
 }
 
@@ -1007,7 +1093,7 @@ function fitLayoutBounds(): void {
   boundY.value = String(fitted.y);
   boundZ.value = String(fitted.z);
   const offset = centerOffsetForBounds(currentLayout, fitted);
-  setLayout(translateLayout(currentLayout, offset));
+  commitLayout(translateLayout(currentLayout, offset));
   renderLog([{ kind: "info", message: `Fitted bounds to ${fitted.x}/${fitted.y}/${fitted.z} and centered by (${offset.x}, ${offset.y}, ${offset.z}).` }]);
 }
 
@@ -1028,7 +1114,7 @@ function deleteRail(railId: number): void {
   updateLayoutMeta(next);
   selectedRail = null;
   selectedRailId = null;
-  setLayout(next);
+  commitLayout(next);
   renderLog([{ kind: "warn", message: `Deleted rail ${railId} (${target.Rail_ID}).` }]);
 }
 
@@ -1056,7 +1142,7 @@ function moveRail(railId: number, offset: Vec3Dict): void {
   rail.Pos_Rev = { x: rail.Pos_Rev.x + offset.x, y: rail.Pos_Rev.y + offset.y, z: rail.Pos_Rev.z + offset.z };
   Object.assign(rail, recalculateRailGeometry(rail));
   updateLayoutMeta(next);
-  setLayout(next, railId);
+  commitLayout(next, railId);
   renderLog([{ kind: "info", message: `Moved rail ${railId} by (${offset.x}, ${offset.y}, ${offset.z}).` }]);
 }
 
@@ -1073,7 +1159,7 @@ function rotateRail(railId: number, axis: RailEditAction["axis"], sign: 1 | -1, 
   });
   Object.assign(rail, recalculateRailGeometry(rail));
   updateLayoutMeta(next);
-  setLayout(next, railId);
+  commitLayout(next, railId);
   renderLog([{ kind: "info", message: `Rotated rail ${railId} ${axis.toUpperCase()}${sign > 0 ? "+" : "-"}${90 * steps}.` }]);
 }
 
@@ -1102,7 +1188,7 @@ function updateEditorStatus(): void {
     const family = findBuildFamily(buildSelection.familyKey);
     const rail = family?.variants[Math.min(buildSelection.sizeIndex, (family?.variants.length ?? 1) - 1)];
     const name = rail ? railDisplayName(rail) : railDisplayNameById(buildSelection.railId);
-    const sizeText = family && rail ? familySizeLabel(family, rail) : `Size ${buildSelection.sizeIndex + 1}`;
+    const sizeText = family && rail ? familySizeText(family, rail) : `Size ${buildSelection.sizeIndex + 1}`;
     editorStatus.textContent = `${name} · ${sizeText} · Spin ${buildSelection.spin * 90} · ${buildPreviewMessage}`;
     editorStatus.classList.remove("is-delete", "is-rotate");
     editorStatus.classList.add("is-build");
@@ -1122,8 +1208,19 @@ function updateEditorStatus(): void {
 function handleEditorKeydown(event: KeyboardEvent): void {
   const target = event.target as HTMLElement | null;
   if (target?.closest("input, textarea, select")) return;
+  const key = event.key.toLowerCase();
+  if ((event.metaKey || event.ctrlKey) && key === "z") {
+    event.preventDefault();
+    if (event.shiftKey) redoLayoutEdit();
+    else undoLayoutEdit();
+    return;
+  }
+  if ((event.metaKey || event.ctrlKey) && key === "y") {
+    event.preventDefault();
+    redoLayoutEdit();
+    return;
+  }
   if (buildSelection) {
-    const key = event.key.toLowerCase();
     if (key === "x" || event.key === "Escape") {
       event.preventDefault();
       exitBuildMode("Build mode exited.");
@@ -1204,7 +1301,7 @@ function toggleSection(button: HTMLButtonElement): void {
 function refreshBoundsOnly(): void {
   normalizeBoundInputs();
   viewer.setBounds(currentBounds());
-  viewer.setLayout(currentLayout);
+  viewer.setLayout(currentLayout, selectedRailId, false);
   buildHoverTarget = null;
   updateBuildPreview();
 }
@@ -1250,6 +1347,7 @@ function handleFile(file: File): void {
       const layout = JSON.parse(text) as MazeLayout;
       const restoredSeed = restoreSeedFromLayout(layout);
       setLayout(layout);
+      resetLayoutHistory(layout, null);
       renderLog([{ kind: "info", message: restoredSeed ? `Loaded ${file.name}; restored seed ${restoredSeed}` : `Loaded ${file.name}` }]);
     } else {
       csvText = text;
@@ -1286,8 +1384,8 @@ langButtons.forEach((button) => button.addEventListener("click", () => {
 collapseToggles.forEach((button) => button.addEventListener("click", () => toggleSection(button)));
 moveCenterBtn.addEventListener("click", moveLayoutToCenter);
 fitBoundsBtn.addEventListener("click", fitLayoutBounds);
-historyBackBtn.addEventListener("click", () => viewer.goBack());
-historyForwardBtn.addEventListener("click", () => viewer.goForward());
+historyBackBtn.addEventListener("click", undoLayoutEdit);
+historyForwardBtn.addEventListener("click", redoLayoutEdit);
 projectionToggleBtn.addEventListener("click", () => {
   const mode = viewer.toggleProjection();
   projectionToggleBtn.textContent = mode === "perspective" ? "透视" : "无透视";

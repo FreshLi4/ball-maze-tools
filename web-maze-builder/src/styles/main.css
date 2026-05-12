@@ -819,7 +819,20 @@ button:hover {
 }
 
 .part-size {
+  color: #68706c;
+}
+
+.size-option {
+  color: #9da39f;
+}
+
+.size-option.is-active {
   color: #2856ff;
+  font-weight: 900;
+}
+
+.size-separator {
+  color: #9da39f;
 }
 
 .part-empty {

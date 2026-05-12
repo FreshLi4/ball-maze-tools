@@ -72,6 +72,18 @@ describe("TypeScript maze port", () => {
     expect(config.get("BP_Start_F_X1_Y1_Z1_Rail")?.exitsLogic[0].Pos.toDict()).toEqual({ x: 1, y: 0, z: 0 });
   });
 
+  it("loads configured display names from flexible CSV name columns", () => {
+    const config = loadConfigFromCsv([
+      "RowName,DisplayName_ZH,DisplayName_EN,DisplayName,Diff_Base,Size,Exit_Array",
+      'BP_Straight_F_X1_Y1_Z1_Rail,直线轨道,Straight Rail,Fallback Name,0,"(X=1,Y=1,Z=1)","((Pos=(X=16,Y=0,Z=0),BaseRot=(P=0,Y=0,R=0),SpinDiff=(X=1,Y=1,Z=1,W=1)))"',
+    ].join("\n"));
+
+    const rail = config.get("BP_Straight_F_X1_Y1_Z1_Rail");
+    expect(rail?.cnName).toBe("直线轨道");
+    expect(rail?.enName).toBe("Straight Rail");
+    expect(rail?.displayName).toBe("Fallback Name");
+  });
+
   it("matches occupied cell behavior for a downward bump", () => {
     const cells = calculateOccupiedCells("BP_Bump_FD_X2_Y1_Z2_Rail", new Vector3(-2, 2, 0), new Vector3(2, 1, 2), 0);
     expect(cells.sort()).toEqual([

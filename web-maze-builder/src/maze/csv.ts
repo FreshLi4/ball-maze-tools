@@ -44,9 +44,12 @@ function normalizeNumber(value: string | undefined, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function normalizeColumnName(name: string): string {
+  return name.replace(/[\s_-]/g, "").toLowerCase();
+}
+
 function getRowValue(row: Record<string, string>, names: string[]): string | undefined {
-  const normalize = (name: string) => name.replace(/[\s_-]/g, "").toLowerCase();
-  const normalizedNames = new Set(names.map(normalize));
+  const normalizedNames = new Set(names.map(normalizeColumnName));
 
   for (const name of names) {
     const value = row[name];
@@ -54,10 +57,42 @@ function getRowValue(row: Record<string, string>, names: string[]): string | und
   }
 
   for (const [name, value] of Object.entries(row)) {
-    if (normalizedNames.has(normalize(name)) && value.trim() !== "") return value;
+    if (normalizedNames.has(normalizeColumnName(name)) && value.trim() !== "") return value;
   }
 
   return undefined;
+}
+
+function getFlexibleRowValue(
+  row: Record<string, string>,
+  exactNames: string[],
+  matchesColumn: (normalizedName: string) => boolean,
+): string | undefined {
+  const exactValue = getRowValue(row, exactNames);
+  if (exactValue !== undefined) return exactValue;
+
+  for (const [name, value] of Object.entries(row)) {
+    if (value.trim() !== "" && matchesColumn(normalizeColumnName(name))) return value;
+  }
+
+  return undefined;
+}
+
+function isNameLikeColumn(normalizedName: string): boolean {
+  return /(name|display|label|title|名称|名字|中文名|英文名)/.test(normalizedName);
+}
+
+function isChineseNameColumn(normalizedName: string): boolean {
+  return isNameLikeColumn(normalizedName) && /(cn|zh|chinese|中文|汉语|简体)/.test(normalizedName);
+}
+
+function isEnglishNameColumn(normalizedName: string): boolean {
+  return isNameLikeColumn(normalizedName) && /(en|english|英文)/.test(normalizedName);
+}
+
+function isDisplayNameColumn(normalizedName: string): boolean {
+  if (/rowname|filename|blueprint|side|tag|ground|exit|diff|size|type/.test(normalizedName)) return false;
+  return /(displayname|railname|label|title|显示名称|名称|名字)/.test(normalizedName);
 }
 
 function parseSize(row: Record<string, string>, name: string): Vector3 {
@@ -211,11 +246,27 @@ export function loadConfigFromCsv(csvText: string): Map<string, RailConfigItem> 
       exitsLogic = inferredExits;
     }
 
+    const displayName = getFlexibleRowValue(
+      row,
+      ["DisplayName", "Display_Name", "Label", "RailName", "Rail_Name", "显示名称", "名称"],
+      isDisplayNameColumn,
+    )?.trim();
+    const cnName = getFlexibleRowValue(
+      row,
+      ["CN_Name", "cn_name", "CNName", "Name_CN", "NameCN", "ChineseName", "Chinese_Name", "ZhName", "ZH_Name", "Name_ZH", "DisplayName_CN", "Display_CN", "DisplayName_ZH", "Display_ZH", "RailName_CN", "RailName_ZH", "CN", "ZH", "中文", "中文名", "中文名称"],
+      isChineseNameColumn,
+    )?.trim();
+    const enName = getFlexibleRowValue(
+      row,
+      ["EN_Name", "en_name", "ENName", "Name_EN", "NameEN", "EnglishName", "English_Name", "EnName", "Name_En", "DisplayName_EN", "Display_EN", "RailName_EN", "EN", "英文", "英文名", "英文名称"],
+      isEnglishNameColumn,
+    )?.trim();
     const railType = row.Type?.trim().toLowerCase() || rowName.toLowerCase();
     config.set(rowName, normalizeRailConfigItem({
       rowName,
-      cnName: getRowValue(row, ["CN_Name", "cn_name", "CNName"])?.trim(),
-      enName: getRowValue(row, ["EN_Name", "en_name", "ENName"])?.trim(),
+      displayName,
+      cnName,
+      enName,
       diffBase,
       sizeRev,
       exitsLogic,

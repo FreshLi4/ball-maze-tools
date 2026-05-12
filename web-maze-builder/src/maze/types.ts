@@ -21,6 +21,8 @@ export interface ExitLogic {
 
 export interface RailConfigItem {
   rowName: string;
+  cnName?: string;
+  enName?: string;
   diffBase: number;
   sizeRev: Vector3;
   exitsLogic: ExitLogic[];

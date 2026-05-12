@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import railConfigCsv from "../../rail_config.csv?raw";
 import { loadConfigFromCsv } from "../maze/csv";
-import { calculateOccupiedCells, calculateOccupiedCellsWithRotAbs, MazeGenerator } from "../maze/generator";
+import { calculateOccupiedCells, calculateOccupiedCellsWithRotAbs, exitDirFromLocalRot, MazeGenerator, transformByRotAbs } from "../maze/generator";
 import { MazeLayout, Vector3 } from "../maze/types";
 
 function expectedDirFromRot(rot: { p: number; y: number; r: number }): "+X" | "+Y" | "-X" | "-Y" | "+Z" | "-Z" {
@@ -246,19 +246,18 @@ describe("TypeScript maze port", () => {
     expect(generator.placedRails.filter((rail) => rail.spinRot !== 0)).toHaveLength(layout.MapMeta.SpinCount ?? 0);
   });
 
-  it("transforms FR90 exits through pitch for the reported seed", () => {
+  it("transforms FR90 exits through pitch", () => {
     const config = loadConfigFromCsv(railConfigCsv);
-    const layout = new MazeGenerator(config, {
-      seed: 790943075,
-      targetDifficulty: 24,
-      targetCheckpoints: 3,
-      maxSpins: 0,
-      bounds: new Vector3(13, 9, 5),
-    }).generate();
-    const rail = layout.Rail.find((item) => item.Rail_ID === "BP_Straight_FR90_X1_Y1_Z1_Rail" && Math.abs(item.Rot_Abs.p - 90) < 1);
+    const rail = config.get("BP_Straight_FR90_X1_Y1_Z1_Rail");
     expect(rail).toBeDefined();
-    expect(rail?.Exit.some((exit) => exit.Exit_Pos_Rev.z !== rail.Pos_Rev.z)).toBe(true);
-    expect(rail?.Exit.some((exit) => exit.Exit_Dir_Abs !== "+Z")).toBe(true);
+    const rotAbs = { p: 90, y: 0, r: 0 };
+    const exits = rail?.exitsLogic.map((exit) => ({
+      pos: transformByRotAbs(exit.Pos, rotAbs),
+      dir: exitDirFromLocalRot(rotAbs, exit.LocalRot),
+    })) ?? [];
+
+    expect(exits.some((exit) => exit.pos.z !== 0)).toBe(true);
+    expect(exits.some((exit) => exit.dir !== "+Z")).toBe(true);
   });
 
   it("derives exported exit direction by applying local exit rotation before rail rotation", () => {

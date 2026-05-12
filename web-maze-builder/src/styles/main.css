@@ -463,6 +463,14 @@ button:hover {
   border-bottom: 1px solid #deded8;
 }
 
+.view-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 .icon-button {
   display: grid;
   place-items: center;
@@ -479,10 +487,21 @@ button:hover {
   white-space: nowrap;
 }
 
+.icon-tool {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  min-width: 36px;
+  padding: 0;
+  font-size: 17px;
+  line-height: 1;
+}
+
 .editor-status {
   height: 34px;
   display: inline-flex;
   align-items: center;
+  flex: 0 1 auto;
   min-width: 0;
   max-width: min(620px, 48vw);
   padding: 0 12px;
@@ -509,13 +528,21 @@ button:hover {
 }
 
 .editor-status.is-build {
-  background: #fff8cf;
-  color: #7a5a00;
-  border-color: #e3cc6b;
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 34px;
+  max-width: none;
+  padding: 0 6px;
+  background: transparent;
+  color: #715100;
+  border-color: transparent;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.35;
 }
 
 .primary-tool {
-  margin-left: auto;
   min-width: 118px;
   color: #fff;
   background: #28302d;
@@ -616,12 +643,34 @@ button:hover {
   z-index: 4;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: 32px 28px 28px 96px;
+  grid-template-rows: 32px 28px 28px 256px;
   gap: 0;
   overflow: hidden;
   background: rgba(251, 251, 248, 0.94);
   border: 1px solid #d9d9d3;
   box-shadow: 0 10px 30px rgba(44, 50, 48, 0.08);
+}
+
+.build-tray.is-collapsed {
+  grid-template-rows: 32px;
+}
+
+.build-tray.is-collapsed .build-tray-head {
+  border-bottom: 0;
+}
+
+.build-tray.is-collapsed .build-tray-toggle::before {
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 6px solid #2c3230;
+  border-right: 0;
+  transform: translateX(1px);
+}
+
+.build-tray.is-collapsed .part-tabs,
+.build-tray.is-collapsed .desc-tabs,
+.build-tray.is-collapsed .part-strip {
+  display: none;
 }
 
 .build-tray-head {
@@ -641,7 +690,11 @@ button:hover {
   text-transform: uppercase;
 }
 
-.build-tray-head span:last-child {
+.build-title {
+  flex-shrink: 0;
+}
+
+#buildHint {
   min-width: 0;
   color: #68706c;
   font-weight: 700;
@@ -650,6 +703,10 @@ button:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.build-tray-toggle {
+  flex-shrink: 0;
 }
 
 .part-tabs,
@@ -718,12 +775,13 @@ button:hover {
 .part-tile {
   position: relative;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) 14px 14px;
+  grid-template-rows: minmax(0, 1fr) 14px 14px 14px;
   gap: 4px;
   min-width: 0;
-  min-height: 80px;
-  height: 80px;
-  padding: 7px;
+  width: 240px;
+  min-height: 240px;
+  height: 240px;
+  padding: 10px;
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid #d9d9d3;
   text-align: left;
@@ -760,11 +818,15 @@ button:hover {
   line-height: 1;
 }
 
+.part-size {
+  color: #2856ff;
+}
+
 .part-empty {
   display: grid;
   place-items: center;
   min-width: 220px;
-  height: 80px;
+  height: 240px;
   background: rgba(255, 255, 255, 0.86);
   border: 1px solid #d9d9d3;
 }
@@ -864,6 +926,13 @@ button:hover {
     font-size: 9px;
   }
 
+  .icon-tool {
+    width: 32px;
+    min-width: 32px;
+    padding: 0;
+    font-size: 15px;
+  }
+
   .log-dock {
     left: 12px;
     right: 12px;
@@ -878,10 +947,20 @@ button:hover {
     right: 12px;
     bottom: 12px;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 30px 26px 26px 92px;
+    grid-template-rows: 30px 26px 26px 226px;
   }
 
   .part-strip {
     grid-auto-columns: 210px;
+  }
+
+  .part-tile {
+    width: 210px;
+    min-height: 210px;
+    height: 210px;
+  }
+
+  .part-empty {
+    height: 210px;
   }
 }

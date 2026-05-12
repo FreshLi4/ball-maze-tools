@@ -1,5 +1,5 @@
 import { GRID_TO_WORLD_SCALE } from "./constants";
-import { RailConfigItem, RotAbs, Vector3 } from "./types";
+import { ExitLogic, RailConfigItem, RotAbs, Vector3 } from "./types";
 
 function parseCsvRows(input: string): string[][] {
   const rows: string[][] = [];
@@ -45,10 +45,18 @@ function normalizeNumber(value: string | undefined, fallback = 0): number {
 }
 
 function getRowValue(row: Record<string, string>, names: string[]): string | undefined {
+  const normalize = (name: string) => name.replace(/[\s_-]/g, "").toLowerCase();
+  const normalizedNames = new Set(names.map(normalize));
+
   for (const name of names) {
     const value = row[name];
     if (value !== undefined && value.trim() !== "") return value;
   }
+
+  for (const [name, value] of Object.entries(row)) {
+    if (normalizedNames.has(normalize(name)) && value.trim() !== "") return value;
+  }
+
   return undefined;
 }
 
@@ -101,6 +109,42 @@ function parseExitArray(exitStr: string) {
   }
 
   return exits;
+}
+
+function defaultSpinDiff(): number[] {
+  return [1, 1, 1, 1];
+}
+
+function createExit(pos: Vector3, localRot: RotAbs): ExitLogic {
+  return {
+    Pos: pos,
+    RotOffset: Math.trunc(localRot.y / 90) % 4,
+    LocalRot: localRot,
+    SpinDiff: defaultSpinDiff(),
+  };
+}
+
+function inferExitsFromRailName(rowName: string, size: Vector3): ExitLogic[] {
+  const rid = rowName.toUpperCase();
+  const forward = () => createExit(new Vector3(size.x, 0, 0), { p: 0, y: 0, r: 0 });
+  const left = () => createExit(new Vector3(size.x - 1, -size.y, 0), { p: 0, y: -90, r: 0 });
+  const right = () => createExit(new Vector3(size.x - 1, size.y, 0), { p: 0, y: 90, r: 0 });
+  const up = () => createExit(new Vector3(size.x - 1, 0, size.z), { p: 90, y: 0, r: 0 });
+  const down = () => createExit(new Vector3(size.x - 1, 0, -size.z), { p: -90, y: 0, r: 0 });
+  const forwardUp = () => createExit(new Vector3(size.x, 0, size.z - 1), { p: 0, y: 0, r: 0 });
+  const forwardDown = () => createExit(new Vector3(size.x, 0, -(size.z - 1)), { p: 0, y: 0, r: 0 });
+
+  if (rid.includes("_FR90_")) return [forward(), right()];
+  if (rid.includes("_FL90_")) return [forward(), left()];
+  if (rid.includes("_T_") || rid.includes("_CR_")) return [right(), left()];
+  if (rid.includes("_L90_")) return [left()];
+  if (rid.includes("_R90_")) return [right()];
+  if (rid.includes("_U90_")) return [up()];
+  if (rid.includes("_D90_")) return [down()];
+  if (rid.includes("_FU_")) return [forwardUp()];
+  if (rid.includes("_FD_")) return [forwardDown()];
+  if (rid.includes("_F_")) return [forward()];
+  return [];
 }
 
 const RIGHT_HANDED_L90_EXIT_OVERRIDES = new Set([
@@ -162,9 +206,16 @@ export function loadConfigFromCsv(csvText: string): Map<string, RailConfigItem> 
         .filter((exit): exit is NonNullable<typeof exit> => exit !== null);
     }
 
+    const inferredExits = inferExitsFromRailName(rowName, sizeRev);
+    if (inferredExits.length > exitsLogic.length) {
+      exitsLogic = inferredExits;
+    }
+
     const railType = row.Type?.trim().toLowerCase() || rowName.toLowerCase();
     config.set(rowName, normalizeRailConfigItem({
       rowName,
+      cnName: getRowValue(row, ["CN_Name", "cn_name", "CNName"])?.trim(),
+      enName: getRowValue(row, ["EN_Name", "en_name", "ENName"])?.trim(),
       diffBase,
       sizeRev,
       exitsLogic,

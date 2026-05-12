@@ -331,7 +331,7 @@ export class MazeGenerator {
 
   exportLayout(): MazeLayout {
     const segmentDiffs = [...this.segmentDiffs];
-    if (this.segmentDiffAcc > 0 || segmentDiffs.length === 0) {
+    if (this.segmentDiffAcc > 0 || segmentDiffs.length === 0 || segmentDiffs.length <= this.placedCheckpointsCount) {
       segmentDiffs.push(Number(this.segmentDiffAcc.toFixed(8)));
     }
     const rails = this.placedRails.map((rail) => {

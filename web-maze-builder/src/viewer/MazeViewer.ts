@@ -83,6 +83,7 @@ export class MazeViewer {
   onEdit?: (action: RailEditAction) => void;
   onBuildHover?: (target: BuildExitTarget | null) => void;
   onBuildPlace?: (target: BuildExitTarget) => void;
+  onBuildSizeCycle?: (direction: 1 | -1) => void;
 
   constructor(private host: HTMLElement) {
     this.scene.background = new THREE.Color(0xfbfbf8);
@@ -105,6 +106,7 @@ export class MazeViewer {
     this.renderer.domElement.addEventListener("pointermove", this.handlePointerMove);
     this.renderer.domElement.addEventListener("pointerup", this.handlePointerUp);
     this.renderer.domElement.addEventListener("pointercancel", this.handlePointerCancel);
+    this.renderer.domElement.addEventListener("wheel", this.handleWheel, { passive: false });
     window.addEventListener("resize", this.resize);
     this.animate();
   }
@@ -115,6 +117,7 @@ export class MazeViewer {
     this.renderer.domElement.removeEventListener("pointermove", this.handlePointerMove);
     this.renderer.domElement.removeEventListener("pointerup", this.handlePointerUp);
     this.renderer.domElement.removeEventListener("pointercancel", this.handlePointerCancel);
+    this.renderer.domElement.removeEventListener("wheel", this.handleWheel);
     window.removeEventListener("resize", this.resize);
     this.renderer.dispose();
     this.host.innerHTML = "";
@@ -817,6 +820,14 @@ export class MazeViewer {
     if (this.renderer.domElement.hasPointerCapture(event.pointerId)) this.renderer.domElement.releasePointerCapture(event.pointerId);
   };
 
+  private handleWheel = (event: WheelEvent): void => {
+    if (!this.buildMode) return;
+    const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+    if (delta === 0) return;
+    event.preventDefault();
+    this.onBuildSizeCycle?.(delta > 0 ? 1 : -1);
+  };
+
   private pickEditAction(event: MouseEvent): RailEditAction | null {
     if (!this.editGizmo) return null;
     const rect = this.renderer.domElement.getBoundingClientRect();
@@ -844,7 +855,33 @@ export class MazeViewer {
       if (target && !target.isConnected) return target;
     }
 
-    return null;
+    return this.pickNearestBuildExit(event);
+  }
+
+  private pickNearestBuildExit(event: MouseEvent): BuildExitTarget | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    let best: BuildExitTarget | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    const threshold = 34;
+
+    for (const marker of this.exitMarkerMap.values()) {
+      const target = marker.userData.buildTarget as BuildExitTarget | undefined;
+      if (!target || target.isConnected) continue;
+      const worldPosition = new THREE.Vector3();
+      marker.getWorldPosition(worldPosition);
+      const projected = worldPosition.project(this.camera);
+      if (projected.z < -1 || projected.z > 1) continue;
+
+      const screenX = rect.left + ((projected.x + 1) * rect.width) / 2;
+      const screenY = rect.top + ((1 - projected.y) * rect.height) / 2;
+      const distance = Math.hypot(event.clientX - screenX, event.clientY - screenY);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = target;
+      }
+    }
+
+    return bestDistance <= threshold ? best : null;
   }
 
   private pickRail(event: MouseEvent): RailMeta | null {

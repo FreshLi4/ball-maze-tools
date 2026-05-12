@@ -22,6 +22,7 @@ const BUILD_GROUPS = [
 ] as const;
 
 type BuildGroupId = (typeof BUILD_GROUPS)[number]["id"];
+type Language = "zh" | "en";
 
 interface BuildSelection {
   familyKey: string;
@@ -136,8 +137,8 @@ app.innerHTML = `
         <img class="brand-icon" src="${import.meta.env.BASE_URL}ball-maze-icon.png" alt="" />
         <h1>BALL MAZE BUILDER</h1>
         <div class="lang-switch" aria-label="Language">
-          <button class="lang is-active">中</button>
-          <button class="lang">EN</button>
+          <button class="lang is-active" data-lang="zh" aria-pressed="true">中</button>
+          <button class="lang" data-lang="en" aria-pressed="false">EN</button>
         </div>
       </div>
 
@@ -214,11 +215,13 @@ app.innerHTML = `
 
     <section class="viewport">
       <header class="topbar">
-        <button id="historyBackBtn" class="tool-chip" title="返回上一个相机 focus。">返回</button>
-        <button id="historyForwardBtn" class="tool-chip" title="前进到下一个相机 focus。">前进</button>
-        <button id="projectionToggleBtn" class="tool-chip" title="在透视和无透视视图之间切换。">透视</button>
+        <button id="historyBackBtn" class="tool-chip icon-tool" title="返回上一个相机 focus。" aria-label="返回上一个相机 focus。">←</button>
+        <button id="historyForwardBtn" class="tool-chip icon-tool" title="前进到下一个相机 focus。" aria-label="前进到下一个相机 focus。">→</button>
         <span id="editorStatus" class="editor-status">Mode: Move</span>
-        <button id="focusToggleBtn" class="tool-chip primary-tool" data-current="Focus: Maze" data-next="Focus: Bounds" title="在建筑区域中心和当前迷宫中心之间切换相机 focus。"></button>
+        <div class="view-tools">
+          <button id="projectionToggleBtn" class="tool-chip" title="在透视和无透视视图之间切换。">透视</button>
+          <button id="focusToggleBtn" class="tool-chip primary-tool" data-current="Focus: Maze" data-next="Focus: Bounds" title="在建筑区域中心和当前迷宫中心之间切换相机 focus。"></button>
+        </div>
       </header>
       <div id="viewerHost" class="viewer"></div>
       <div class="view-axis" aria-label="View axis">
@@ -235,8 +238,9 @@ app.innerHTML = `
       </div>
       <div class="build-tray" id="buildTray" aria-label="Rail build library">
         <div class="build-tray-head">
-          <span>Rail Library</span>
+          <span class="build-title">Rail Library</span>
           <span id="buildHint">Select a rail to build from open exits.</span>
+          <button id="buildTrayToggleBtn" class="collapse-toggle build-tray-toggle" title="收起 Rail Library。" aria-label="Toggle rail library" aria-expanded="true"></button>
         </div>
         <div id="partTabs" class="part-tabs" role="tablist"></div>
         <div id="descTabs" class="desc-tabs" role="tablist"></div>
@@ -259,6 +263,7 @@ const detailContent = document.querySelector<HTMLDivElement>("#detailContent")!;
 const logContent = document.querySelector<HTMLDivElement>("#logContent")!;
 const logDock = document.querySelector<HTMLDivElement>(".log-dock")!;
 const logToggleBtn = document.querySelector<HTMLButtonElement>("#logToggleBtn")!;
+const langButtons = document.querySelectorAll<HTMLButtonElement>(".lang[data-lang]");
 const generateBtn = document.querySelector<HTMLButtonElement>("#generateBtn")!;
 const downloadBtn = document.querySelector<HTMLButtonElement>("#downloadBtn")!;
 const resetCameraBtn = document.querySelector<HTMLButtonElement>("#resetCameraBtn")!;
@@ -275,6 +280,7 @@ const collapseToggles = document.querySelectorAll<HTMLButtonElement>(".collapse-
 const dropZone = document.querySelector<HTMLDivElement>("#dropZone")!;
 const buildTray = document.querySelector<HTMLDivElement>("#buildTray")!;
 const buildHint = document.querySelector<HTMLSpanElement>("#buildHint")!;
+const buildTrayToggleBtn = document.querySelector<HTMLButtonElement>("#buildTrayToggleBtn")!;
 const partTabs = document.querySelector<HTMLDivElement>("#partTabs")!;
 const descTabs = document.querySelector<HTMLDivElement>("#descTabs")!;
 const partStrip = document.querySelector<HTMLDivElement>("#partStrip")!;
@@ -289,6 +295,7 @@ const boundZ = document.querySelector<HTMLInputElement>("#boundZ")!;
 const viewer = new MazeViewer(viewerHost);
 let csvText = railConfigCsv;
 let currentLayout: MazeLayout = JSON.parse(sampleLayoutRaw) as MazeLayout;
+let currentLanguage: Language = "zh";
 let focusMode: "maze" | "bounds" = "maze";
 let selectedRail: RailMeta | null = null;
 let selectedRailId: number | null = null;
@@ -308,6 +315,31 @@ function markLatin(text: string): string {
 
 function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
+}
+
+function railDisplayName(rail: RailConfigItem): string {
+  return currentLanguage === "en"
+    ? rail.enName || rail.cnName || rail.rowName
+    : rail.cnName || rail.enName || rail.rowName;
+}
+
+function railDisplayNameById(railId: string): string {
+  const rail = loadConfigFromCsv(csvText).get(railId);
+  return rail ? railDisplayName(rail) : railId;
+}
+
+function railSizeValue(rail: RailConfigItem): number {
+  return Math.max(rail.sizeRev.x, rail.sizeRev.y, rail.sizeRev.z);
+}
+
+function familySizeValues(family: BuildRailFamily): number[] {
+  return [...new Set(family.variants.map(railSizeValue))].sort((a, b) => a - b);
+}
+
+function familySizeLabel(family: BuildRailFamily, activeRail: RailConfigItem): string {
+  const active = railSizeValue(activeRail);
+  const available = familySizeValues(family);
+  return `Size ${active}${available.length > 1 ? ` / ${available.join("/")}` : ""}`;
 }
 
 function classifyRailGroup(rail: RailConfigItem): BuildGroupId {
@@ -336,9 +368,7 @@ function railDescriptor(rail: RailConfigItem): string {
 }
 
 function compareRailSize(a: RailConfigItem, b: RailConfigItem): number {
-  const volumeA = a.sizeRev.x * a.sizeRev.y * a.sizeRev.z;
-  const volumeB = b.sizeRev.x * b.sizeRev.y * b.sizeRev.z;
-  return volumeA - volumeB || a.sizeRev.x - b.sizeRev.x || a.sizeRev.y - b.sizeRev.y || a.sizeRev.z - b.sizeRev.z || a.rowName.localeCompare(b.rowName);
+  return railSizeValue(a) - railSizeValue(b) || a.sizeRev.x - b.sizeRev.x || a.sizeRev.y - b.sizeRev.y || a.sizeRev.z - b.sizeRev.z || a.rowName.localeCompare(b.rowName);
 }
 
 function buildFamilies(): BuildRailFamily[] {
@@ -419,11 +449,14 @@ function renderPartLibrary(): void {
       .map((family) => {
         const rail = railForFamilyDisplay(family);
         const selected = buildSelection?.familyKey === family.key;
+        const displayName = railDisplayName(rail);
+        const sizeLabel = familySizeLabel(family, rail);
         return `
           <button class="part-tile ${selected ? "is-selected" : ""}" data-family-key="${escapeHtml(family.key)}" title="${escapeHtml(rail.rowName)}">
-            <span class="part-name">${markLatin(rail.rowName)}</span>
+            <span class="part-name">${markLatin(displayName)}</span>
             <span class="part-meta">${markLatin(`Difficulty ${rail.diffBase}`)}</span>
             <span class="part-meta">${markLatin(`Exits ${rail.exitsLogic.length}`)}</span>
+            <span class="part-meta part-size">${markLatin(sizeLabel)}</span>
           </button>
         `;
       })
@@ -432,14 +465,14 @@ function renderPartLibrary(): void {
 
   buildTray.classList.toggle("is-building", buildSelection !== null);
   buildHint.textContent = buildSelection
-    ? "Hover an open exit. Left click places, R spins, 1-4 switches size, X exits."
+    ? "Hover an open exit. Left click places, wheel/1-4 switches size, R spins, X exits."
     : "Select a rail to build from open exits.";
 }
 
 function renderRailDetail(rail: RailMeta | null): void {
   if (!rail) {
     const message = buildSelection
-      ? `Build mode: ${buildSelection.railId}. Hover an open exit, R spin, 1-4 size, X exit.`
+      ? `Build mode: ${railDisplayNameById(buildSelection.railId)}. Hover an open exit, wheel/1-4 size, R spin, X exit.`
       : deleteMode
         ? "Delete mode: click a rail to delete it."
         : "Hover a rail in the scene.";
@@ -448,7 +481,7 @@ function renderRailDetail(rail: RailMeta | null): void {
   }
   detailContent.innerHTML = `
     <div class="detail-row"><span>${markLatin("ID")}</span><strong>${markLatin(String(rail.id))}</strong></div>
-    <div class="detail-row"><span>${markLatin("Type")}</span><strong>${markLatin(rail.type)}</strong></div>
+    <div class="detail-row"><span>${markLatin("Type")}</span><strong>${markLatin(railDisplayNameById(rail.type))}</strong></div>
     <div class="detail-row"><span>${markLatin("Rev")}</span><strong>${markLatin(formatVec(rail.posRev))}</strong></div>
     <div class="detail-row"><span>${markLatin("Abs")}</span><strong>${markLatin(formatVec(rail.pos))}</strong></div>
     <div class="detail-row"><span>${markLatin("Rot")}</span><strong>${markLatin(`${rail.rot.p}/${rail.rot.y}/${rail.rot.r}`)}</strong></div>
@@ -484,6 +517,10 @@ viewer.onBuildHover = (target) => {
 
 viewer.onBuildPlace = (target) => {
   placeBuildRail(target);
+};
+
+viewer.onBuildSizeCycle = (direction) => {
+  cycleBuildSize(direction);
 };
 
 function readGeneratorStateFromControls(random = Number(createRandomSeed())): GeneratorSeedState {
@@ -659,12 +696,13 @@ function selectBuildFamily(familyKey: string): void {
   }
 
   const family = findBuildFamily(familyKey);
-  const railId = family?.variants[0]?.rowName;
-  if (!railId) return;
+  const rail = family?.variants[0];
+  const railId = rail?.rowName;
+  if (!family || !railId || !rail) return;
 
   buildSelection = { familyKey, railId, sizeIndex: 0, spin: 0 };
   buildHoverTarget = null;
-  buildPreviewMessage = "Hover an open exit. Left click places, R spins, 1-4 switches size, X exits.";
+  buildPreviewMessage = "Hover an open exit. Wheel or 1-4 switches size.";
   deleteMode = false;
   selectedRail = null;
   selectedRailId = null;
@@ -674,7 +712,7 @@ function selectBuildFamily(familyKey: string): void {
   renderRailDetail(null);
   renderPartLibrary();
   updateEditorStatus();
-  renderLog([{ kind: "info", message: `Build mode: ${railId}. Hover an open exit, R spins, 1-4 switches size, X exits.` }]);
+  renderLog([{ kind: "info", message: `Build mode: ${railDisplayName(rail)} (${familySizeLabel(family, rail)}). Hover an open exit, wheel/1-4 switches size, R spins, X exits.` }]);
 }
 
 function exitBuildMode(message?: string): void {
@@ -721,11 +759,19 @@ function switchBuildSize(slot: number): void {
     railId: variant.rowName,
     sizeIndex: index,
   };
-  buildPreviewMessage = `Size ${slot}/${family.variants.length}: ${variant.rowName}.`;
+  buildPreviewMessage = `${familySizeLabel(family, variant)} · ${railDisplayName(variant)}.`;
   renderRailDetail(null);
   renderPartLibrary();
   updateBuildPreview();
   updateEditorStatus();
+}
+
+function cycleBuildSize(direction: 1 | -1): void {
+  if (!buildSelection) return;
+  const family = findBuildFamily(buildSelection.familyKey);
+  if (!family || family.variants.length <= 1) return;
+  const nextIndex = (buildSelection.sizeIndex + direction + family.variants.length) % family.variants.length;
+  switchBuildSize(nextIndex + 1);
 }
 
 function updateBuildPreview(): void {
@@ -841,7 +887,7 @@ function placeBuildRail(target: BuildExitTarget): void {
   viewer.setBuildPreview(null);
   renderPartLibrary();
   updateEditorStatus();
-  renderLog([{ kind: "success", message: `Placed ${result.rail.Rail_ID} on rail ${target.parentRailId} exit ${target.exitIndex} with local spin ${buildSelection.spin * 90}.` }]);
+  renderLog([{ kind: "success", message: `Placed ${railDisplayNameById(result.rail.Rail_ID)} on rail ${target.parentRailId} exit ${target.exitIndex} with local spin ${buildSelection.spin * 90}.` }]);
 }
 
 function nextRailIndex(layout: MazeLayout): number {
@@ -1054,8 +1100,10 @@ function toggleDeleteMode(): void {
 function updateEditorStatus(): void {
   if (buildSelection) {
     const family = findBuildFamily(buildSelection.familyKey);
-    const sizeCount = family?.variants.length ?? 1;
-    editorStatus.textContent = `Build: ${buildSelection.railId} · Size ${buildSelection.sizeIndex + 1}/${sizeCount} · Spin ${buildSelection.spin * 90} · ${buildPreviewMessage} · X exit`;
+    const rail = family?.variants[Math.min(buildSelection.sizeIndex, (family?.variants.length ?? 1) - 1)];
+    const name = rail ? railDisplayName(rail) : railDisplayNameById(buildSelection.railId);
+    const sizeText = family && rail ? familySizeLabel(family, rail) : `Size ${buildSelection.sizeIndex + 1}`;
+    editorStatus.textContent = `${name} · ${sizeText} · Spin ${buildSelection.spin * 90} · ${buildPreviewMessage}`;
     editorStatus.classList.remove("is-delete", "is-rotate");
     editorStatus.classList.add("is-build");
     buildHint.textContent = buildPreviewMessage;
@@ -1120,6 +1168,24 @@ function toggleLogDock(): void {
   const isCollapsed = logDock.classList.toggle("is-collapsed");
   logToggleBtn.title = isCollapsed ? "展开生成日志内容。" : "收起生成日志内容。";
   logToggleBtn.setAttribute("aria-expanded", String(!isCollapsed));
+}
+
+function toggleBuildTray(): void {
+  const isCollapsed = buildTray.classList.toggle("is-collapsed");
+  buildTrayToggleBtn.title = isCollapsed ? "展开 Rail Library。" : "收起 Rail Library。";
+  buildTrayToggleBtn.setAttribute("aria-expanded", String(!isCollapsed));
+}
+
+function setLanguage(language: Language): void {
+  currentLanguage = language;
+  langButtons.forEach((button) => {
+    const isActive = button.dataset.lang === language;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
+  });
+  renderPartLibrary();
+  renderRailDetail(selectedRail);
+  updateEditorStatus();
 }
 
 function toggleSection(button: HTMLButtonElement): void {
@@ -1212,6 +1278,11 @@ seedInput.addEventListener("input", () => {
   seedInputTimer = window.setTimeout(generateFromSeedInput, 250);
 });
 logToggleBtn.addEventListener("click", toggleLogDock);
+buildTrayToggleBtn.addEventListener("click", toggleBuildTray);
+langButtons.forEach((button) => button.addEventListener("click", () => {
+  const language = button.dataset.lang === "en" ? "en" : "zh";
+  setLanguage(language);
+}));
 collapseToggles.forEach((button) => button.addEventListener("click", () => toggleSection(button)));
 moveCenterBtn.addEventListener("click", moveLayoutToCenter);
 fitBoundsBtn.addEventListener("click", fitLayoutBounds);

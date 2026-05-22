@@ -1318,8 +1318,11 @@ function downloadLayout(): void {
   const link = document.createElement("a");
   link.href = url;
   link.download = `${downloadFileStem(currentLayout.MapMeta.LevelName)}.json`;
+  link.style.display = "none";
+  document.body.append(link);
   link.click();
-  URL.revokeObjectURL(url);
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function downloadFileStem(levelName: string): string {

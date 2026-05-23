@@ -1,15 +1,15 @@
 """
 Import a web-maze-builder JSON layout into the current Unreal level.
 
-Run inside Unreal Editor Python. The script reads maze_layout.json plus a rail
-reference CSV, places BP_Maze at world origin when configured, and places rails
-from the JSON. If the CSV has Blueprint/Class references, those are used; with
-the current CSV it falls back to the StaticMesh references in Side/BR/BL/B/L/R.
+Run inside Unreal Editor Python. The script prompts for a JSON file when
+possible, reads rail Blueprint/Class references from the CSV, places BP_Maze at
+world origin when configured, and places rail Blueprints from the JSON.
 """
 
 from __future__ import annotations
 
 import csv
+import io
 import json
 import math
 import re
@@ -28,10 +28,17 @@ except ImportError as exc:
 # ============================================================
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_LAYOUT_JSON = REPO_ROOT / "web-maze-builder" / "maze_layout.json"
-DEFAULT_RAIL_CONFIG_CSV = REPO_ROOT / "web-maze-builder" / "rail_config.csv"
+DEFAULT_RAIL_CONFIG_CSV = SCRIPT_DIR / "DT_RailConfig.csv"
+RAIL_CONFIG_DATA_TABLE_REF = "/Script/Engine.DataTable'/Game/DataAssets/DT/PCG/DT_RailConfig.DT_RailConfig'"
 
-FOLDER_PATH = "GeneratedMazeRails"
+# Leave empty to require the file picker. If the picker is unavailable, set this
+# to an absolute path or a path relative to the repo root.
+LAYOUT_JSON_PATH = ""
+PROMPT_FOR_JSON_ON_RUN = True
+
+FOLDER_PATH = "04_Level/Rail"
 CLEAR_EXISTING_IN_FOLDER = True
 SELECT_SPAWNED_ACTORS = True
 
@@ -50,7 +57,8 @@ BP_MAZE_BOTTOM_CLASS_PATHS = {
     "4x4": "",
 }
 
-RAIL_CLASS_COLUMNS = ("BP_Rail", "Rail", "RailRef", "Reference", "Actor", "Blueprint", "Class")
+# CSV columns that may contain a real BP_Rail Blueprint/Class reference.
+RAIL_CLASS_COLUMNS = ("RailClassRef", "BP_Rail", "RailActor", "RailBP", "RailRef", "Reference", "Actor", "Blueprint", "Class")
 RAIL_PART_COLUMNS = ("Side", "BR", "BL", "B", "L", "R")
 
 
@@ -67,7 +75,7 @@ class RailRef:
 class RailConfigRow:
     row_name: str
     actor_refs: List[RailRef]
-    mesh_refs: List[RailRef]
+    derived_actor_refs: List[RailRef]
 
 
 def _log(message: str) -> None:
@@ -91,6 +99,8 @@ def _read_json(path: Path) -> dict:
 
 def _looks_like_unreal_ref(value: str) -> bool:
     value = value.strip()
+    if not value or value.lower() == "none":
+        return False
     return bool(value) and ("/Game/" in value or value.startswith("/Script/"))
 
 
@@ -109,6 +119,25 @@ def _normalize_asset_ref(raw_ref: str) -> Optional[Tuple[str, str]]:
 
 
 def _read_rail_config(csv_path: Path) -> Dict[str, RailConfigRow]:
+    data_table_config = _read_rail_config_from_data_table()
+    if data_table_config:
+        if _config_has_any_actor_ref(data_table_config):
+            _log(f"Loaded {len(data_table_config)} rail config rows from DataTable {RAIL_CONFIG_DATA_TABLE_REF}.")
+            return data_table_config
+        _warn(
+            f"DataTable {RAIL_CONFIG_DATA_TABLE_REF} loaded {len(data_table_config)} rows, "
+            "but no usable RailClassRef values were readable from Python."
+        )
+
+    _warn(f"Falling back to CSV rail config: {csv_path}")
+    return _read_rail_config_from_csv(csv_path)
+
+
+def _config_has_any_actor_ref(config: Dict[str, RailConfigRow]) -> bool:
+    return any(_actor_ref_candidates(row) for row in config.values())
+
+
+def _read_rail_config_from_csv(csv_path: Path) -> Dict[str, RailConfigRow]:
     if not csv_path.exists():
         raise FileNotFoundError(f"Rail config CSV not found: {csv_path}")
 
@@ -120,33 +149,309 @@ def _read_rail_config(csv_path: Path) -> Dict[str, RailConfigRow]:
             raise RuntimeError(f"CSV has no header row: {csv_path}")
 
         for row_number, row in enumerate(reader, start=2):
-            row_name = (row.get("RowName") or row.get("Name") or "").strip()
-            if not row_name:
-                _warn(f"CSV row {row_number} skipped: missing RowName/Name.")
-                continue
-
-            actor_refs: List[RailRef] = []
-            mesh_refs: List[RailRef] = []
-
-            for column_name in RAIL_CLASS_COLUMNS:
-                raw_ref = (row.get(column_name) or "").strip()
-                normalized = _normalize_asset_ref(raw_ref)
-                if normalized:
-                    object_path, package_path = normalized
-                    actor_refs.append(RailRef(column_name, raw_ref, object_path, package_path, True))
-
-            for column_name in RAIL_PART_COLUMNS:
-                raw_ref = (row.get(column_name) or "").strip()
-                normalized = _normalize_asset_ref(raw_ref)
-                if normalized:
-                    object_path, package_path = normalized
-                    mesh_refs.append(RailRef(column_name, raw_ref, object_path, package_path, False))
-
-            existing = config.setdefault(row_name, RailConfigRow(row_name, [], []))
-            _append_unique_refs(existing.actor_refs, actor_refs)
-            _append_unique_refs(existing.mesh_refs, mesh_refs)
+            _add_config_row_from_csv_dict(config, row, row_number, str(csv_path))
 
     return config
+
+
+def _add_config_row_from_csv_dict(config: Dict[str, RailConfigRow], row: dict, row_number: int, source_name: str) -> None:
+    row_name = (row.get("RowName") or row.get("Name") or row.get("---") or "").strip()
+    if not row_name:
+        if _is_blank_csv_row(row):
+            return
+        _warn(f"{source_name} row {row_number} skipped: missing RowName/Name.")
+        return
+
+    actor_refs: List[RailRef] = []
+    mesh_refs: List[RailRef] = []
+
+    for column_name in RAIL_CLASS_COLUMNS:
+        raw_ref = (row.get(column_name) or "").strip()
+        normalized = _normalize_asset_ref(raw_ref)
+        if normalized:
+            object_path, package_path = normalized
+            actor_refs.append(RailRef(column_name, raw_ref, object_path, package_path, True))
+
+    for column_name in RAIL_PART_COLUMNS:
+        raw_ref = (row.get(column_name) or "").strip()
+        normalized = _normalize_asset_ref(raw_ref)
+        if normalized:
+            object_path, package_path = normalized
+            mesh_refs.append(RailRef(column_name, raw_ref, object_path, package_path, False))
+
+    derived_actor_refs = _derive_actor_refs_from_mesh_refs(row_name, mesh_refs)
+
+    existing = config.get(row_name) or RailConfigRow(row_name, [], [])
+    _append_unique_refs(existing.actor_refs, actor_refs)
+    _append_unique_refs(existing.derived_actor_refs, derived_actor_refs)
+    for alias in _config_aliases(row_name, existing):
+        config[alias] = existing
+
+
+def _is_blank_csv_row(row: dict) -> bool:
+    for value in row.values():
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text and text.lower() != "none":
+            return False
+    return True
+
+
+def _config_aliases(row_name: str, config_row: RailConfigRow) -> List[str]:
+    aliases = [row_name]
+    leaf = row_name.rstrip("/").rsplit("/", 1)[-1]
+    if leaf:
+        aliases.append(leaf)
+        if not leaf.startswith("BP_"):
+            aliases.append(f"BP_{leaf}_Rail")
+
+    for ref in _actor_ref_candidates(config_row):
+        class_name = _class_name_from_ref_path(ref.object_path)
+        if class_name:
+            aliases.append(class_name)
+
+    return _unique_strings([alias for alias in aliases if alias])
+
+
+def _class_name_from_ref_path(object_path: str) -> str:
+    leaf = str(object_path).rsplit("/", 1)[-1].split(".", 1)[-1]
+    if leaf.endswith("_C"):
+        leaf = leaf[:-2]
+    return leaf
+
+
+def _read_rail_config_from_data_table() -> Dict[str, RailConfigRow]:
+    data_table = _load_data_table()
+    if not data_table:
+        return {}
+
+    csv_text = _data_table_to_csv_text(data_table)
+    if csv_text:
+        return _read_rail_config_from_csv_text(csv_text, "DataTable export")
+
+    config: Dict[str, RailConfigRow] = {}
+    row_names = _get_data_table_row_names(data_table)
+    row_map = _get_data_table_row_map(data_table)
+
+    for row_name_value in row_names:
+        row_name = str(row_name_value)
+        row = _get_data_table_row(data_table, row_name_value, row_map)
+        rail_class_ref = _get_row_ref_text(row, ("RailClassRef", "Rail_Class_Ref", "RailClass", "RailRef", "BP_Rail"))
+        actor_refs = _rail_refs_from_text("RailClassRef", rail_class_ref)
+        config[row_name] = RailConfigRow(row_name, actor_refs, [])
+
+    return config
+
+
+def _data_table_to_csv_text(data_table) -> str:
+    candidates = (
+        ("DataTableFunctionLibrary.export_data_table_to_csv_string", lambda: unreal.DataTableFunctionLibrary.export_data_table_to_csv_string(data_table)),
+        ("DataTableFunctionLibrary.get_data_table_as_csv_string", lambda: unreal.DataTableFunctionLibrary.get_data_table_as_csv_string(data_table)),
+        ("data_table.get_table_as_csv", lambda: data_table.get_table_as_csv()),
+        ("data_table.get_table_as_csv_string", lambda: data_table.get_table_as_csv_string()),
+    )
+
+    for label, getter in candidates:
+        try:
+            result = getter()
+            if isinstance(result, tuple):
+                result = next((item for item in result if isinstance(item, str) and item.strip()), "")
+            if isinstance(result, str) and result.strip():
+                _log(f"Read rail config DataTable via {label}.")
+                return result
+        except Exception:
+            pass
+
+    return ""
+
+
+def _read_rail_config_from_csv_text(csv_text: str, source_name: str) -> Dict[str, RailConfigRow]:
+    config: Dict[str, RailConfigRow] = {}
+    reader = csv.DictReader(io.StringIO(csv_text))
+    if not reader.fieldnames:
+        raise RuntimeError(f"CSV has no header row: {source_name}")
+
+    for row_number, row in enumerate(reader, start=2):
+        _add_config_row_from_csv_dict(config, row, row_number, source_name)
+
+    return config
+
+
+def _load_data_table():
+    normalized = _normalize_asset_ref(RAIL_CONFIG_DATA_TABLE_REF)
+    if not normalized:
+        _warn(f"Invalid DataTable ref: {RAIL_CONFIG_DATA_TABLE_REF}")
+        return None
+
+    object_path, package_path = normalized
+    for path in (package_path, object_path):
+        try:
+            asset = unreal.EditorAssetLibrary.load_asset(path)
+        except Exception:
+            asset = None
+        if asset:
+            return asset
+
+    _warn(f"Rail config DataTable not found: {RAIL_CONFIG_DATA_TABLE_REF}")
+    return None
+
+
+def _get_data_table_row_names(data_table) -> List:
+    try:
+        return list(unreal.DataTableFunctionLibrary.get_data_table_row_names(data_table))
+    except Exception:
+        pass
+
+    for method_name in ("get_row_names", "get_table_row_names"):
+        method = getattr(data_table, method_name, None)
+        if method:
+            try:
+                return list(method())
+            except Exception:
+                pass
+
+    row_map = _get_data_table_row_map(data_table)
+    if row_map:
+        return list(row_map.keys())
+
+    return []
+
+
+def _get_data_table_row_map(data_table):
+    method = getattr(data_table, "get_row_map", None)
+    if method:
+        try:
+            return method()
+        except Exception:
+            pass
+    return {}
+
+
+def _get_data_table_row(data_table, row_name, row_map):
+    if row_map:
+        for key in (row_name, str(row_name)):
+            try:
+                if key in row_map:
+                    return row_map[key]
+            except Exception:
+                pass
+        for key, value in row_map.items():
+            if str(key) == str(row_name):
+                return value
+
+    try:
+        result = unreal.DataTableFunctionLibrary.get_data_table_row_from_name(data_table, row_name)
+        if isinstance(result, tuple):
+            if len(result) >= 2 and result[0]:
+                return result[1]
+            if len(result) == 1:
+                return result[0]
+        elif result:
+            return result
+    except Exception:
+        pass
+
+    method = getattr(data_table, "get_row", None)
+    if method:
+        try:
+            return method(row_name)
+        except Exception:
+            pass
+
+    return None
+
+
+def _get_row_ref_text(row, property_names: Sequence[str]) -> str:
+    if row is None:
+        return ""
+
+    if isinstance(row, dict):
+        for property_name in property_names:
+            if property_name in row:
+                return _ref_value_to_text(row[property_name])
+
+    for property_name in property_names:
+        try:
+            value = row.get_editor_property(property_name)
+            text = _ref_value_to_text(value)
+            if text:
+                return text
+        except Exception:
+            pass
+
+    for property_name in property_names:
+        for attr_name in (property_name, _camel_to_snake(property_name), property_name.lower()):
+            if hasattr(row, attr_name):
+                text = _ref_value_to_text(getattr(row, attr_name))
+                if text:
+                    return text
+
+    return ""
+
+
+def _camel_to_snake(value: str) -> str:
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", value).lower()
+
+
+def _ref_value_to_text(value) -> str:
+    if value is None:
+        return ""
+
+    if isinstance(value, str):
+        return "" if value.strip().lower() == "none" else value.strip()
+
+    for method_name in ("get_asset_path_string", "to_string", "get_path_name"):
+        method = getattr(value, method_name, None)
+        if method:
+            try:
+                text = str(method()).strip()
+                if text and text.lower() != "none":
+                    return text
+            except Exception:
+                pass
+
+    text = str(value).strip()
+    return "" if text.lower() == "none" else text
+
+
+def _rail_refs_from_text(column_name: str, raw_ref: str) -> List[RailRef]:
+    normalized = _normalize_asset_ref(raw_ref)
+    if not normalized:
+        return []
+    object_path, package_path = normalized
+    return [RailRef(column_name, raw_ref, object_path, package_path, True)]
+
+
+def _derive_actor_refs_from_mesh_refs(row_name: str, mesh_refs: Sequence[RailRef]) -> List[RailRef]:
+    refs: List[RailRef] = []
+    for mesh_ref in mesh_refs:
+        package_path = mesh_ref.package_path
+        if "/Proxy/" in package_path:
+            rail_folder = package_path.split("/Proxy/", 1)[0]
+        else:
+            rail_folder = package_path.rsplit("/", 1)[0]
+
+        for bp_name in _derived_bp_names(row_name, mesh_ref.package_path):
+            object_path = f"{rail_folder}/{bp_name}.{bp_name}"
+            refs.append(RailRef("DerivedBP", object_path, object_path, object_path.split(".", 1)[0], True))
+
+    return refs
+
+
+def _derived_bp_names(row_name: str, mesh_package_path: str) -> List[str]:
+    names = [row_name]
+
+    folder_name = mesh_package_path.rsplit("/Proxy/", 1)[0].rsplit("/", 1)[-1]
+    if folder_name:
+        names.append(f"BP_{folder_name}_Rail")
+
+    mesh_name = mesh_package_path.rsplit("/", 1)[-1]
+    match = re.match(r"SM_(.+?)_Proxy(?:_[A-Za-z0-9]+)?$", mesh_name)
+    if match:
+        names.append(f"BP_{match.group(1)}_Rail")
+
+    return _unique_strings(names)
 
 
 def _append_unique_refs(target: List[RailRef], incoming: Iterable[RailRef]) -> None:
@@ -171,101 +476,268 @@ def _rail_id(rail: dict) -> str:
     return value.strip()
 
 
-def _validate_references(rails: Sequence[dict], config: Dict[str, RailConfigRow]) -> None:
-    missing_rows = []
-    missing_refs = []
+def _log_reference_report(report: dict) -> None:
+    missing_rows = report.get("missing_rows", [])
+    empty_refs = report.get("empty_refs", [])
+    class_failures = report.get("class_failures", [])
 
-    for rail in rails:
-        rail_id = _rail_id(rail)
-        config_row = config.get(rail_id)
-        if not config_row:
-            missing_rows.append(rail_id)
-        elif not config_row.actor_refs and not config_row.mesh_refs:
-            missing_refs.append(rail_id)
+    if missing_rows:
+        _warn("These Rail_ID values did not match any config row name or alias:")
+        for rail_id in sorted(set(missing_rows)):
+            _warn(f"  - {rail_id}")
 
-    if missing_rows or missing_refs:
-        if missing_rows:
-            _error("These Rail_ID values are missing from the CSV:")
-            for rail_id in sorted(set(missing_rows)):
-                _error(f"  - {rail_id}")
-        if missing_refs:
-            _error("These Rail_ID values have no usable Blueprint/Class or StaticMesh refs:")
-            for rail_id in sorted(set(missing_refs)):
-                _error(f"  - {rail_id}")
-        raise RuntimeError("Missing rail references. Fix the CSV before placing rails.")
+    if empty_refs:
+        _warn("These Rail_ID values matched a config row, but RailClassRef was empty or unreadable:")
+        for rail_id in sorted(set(empty_refs)):
+            _warn(f"  - {rail_id}")
+
+    if class_failures:
+        _warn("These Rail_ID values had RailClassRef candidates, but class loading failed:")
+        for rail_id, message in class_failures:
+            _warn(f"  - {rail_id}: {message}")
+
+
+def _actor_ref_candidates(config_row: RailConfigRow) -> List[RailRef]:
+    return config_row.actor_refs or config_row.derived_actor_refs
 
 
 def _load_actor_class(path: str):
     if not path:
         return None
 
-    for candidate in (path, f"{path}_C"):
+    for candidate in _class_path_candidates(path):
         try:
             obj = unreal.load_object(None, candidate)
-            if obj and _is_loaded_class(obj):
-                return obj
+            actor_class = _coerce_actor_class(obj)
+            if actor_class:
+                return actor_class
         except Exception:
             pass
 
     try:
         loaded = unreal.EditorAssetLibrary.load_blueprint_class(path)
-        if loaded:
-            return loaded
+        actor_class = _coerce_actor_class(loaded)
+        if actor_class:
+            return actor_class
     except Exception:
         pass
 
     asset = unreal.EditorAssetLibrary.load_asset(path)
-    if asset:
-        try:
-            return asset.generated_class()
-        except Exception:
-            pass
-        try:
-            generated = asset.get_editor_property("generated_class")
-            if generated:
-                return generated
-        except Exception:
-            pass
+    actor_class = _coerce_actor_class(asset)
+    if actor_class:
+        return actor_class
 
     raise RuntimeError(f"Failed to load actor class: {path}")
 
 
-def _is_loaded_class(obj) -> bool:
-    if hasattr(obj, "get_default_object"):
-        return True
+def _class_path_candidates(path: str) -> List[str]:
+    candidates = []
+    clean = str(path).strip()
+    if not clean:
+        return candidates
+
+    candidates.append(clean)
+    if clean.endswith("_C"):
+        return _unique_strings(candidates)
+
+    if "." in clean:
+        candidates.append(f"{clean}_C")
+    else:
+        asset_name = clean.rsplit("/", 1)[-1]
+        candidates.append(f"{clean}.{asset_name}_C")
+        candidates.append(f"{clean}_C")
+
+    return _unique_strings(candidates)
+
+
+def _unique_strings(values: Sequence[str]) -> List[str]:
+    result = []
+    seen = set()
+    for value in values:
+        if value not in seen:
+            result.append(value)
+            seen.add(value)
+    return result
+
+
+def _coerce_actor_class(obj):
+    if not obj:
+        return None
+
+    if _is_loaded_class(obj):
+        return obj
+
+    generated = None
     try:
-        return obj.get_class().get_name() == "Class"
+        generated = obj.generated_class()
+    except Exception:
+        pass
+
+    if not generated:
+        try:
+            generated = obj.get_editor_property("generated_class")
+        except Exception:
+            pass
+
+    if generated and _is_loaded_class(generated):
+        return generated
+
+    return None
+
+
+def _load_first_actor_class(refs: Sequence[RailRef]):
+    failures = []
+    for ref in refs:
+        for path in (ref.object_path, ref.package_path):
+            try:
+                actor_class = _load_actor_class(path)
+                return actor_class, ref
+            except Exception as exc:
+                failures.append(f"{path}: {exc}")
+    raise RuntimeError("Failed to load any BP/Class candidate:\n" + "\n".join(failures[:8]))
+
+
+def _resolve_rail_classes(rails: Sequence[dict], config: Dict[str, RailConfigRow]) -> Tuple[Dict[str, object], Dict[str, str], dict]:
+    class_cache = {}
+    rail_cache_keys = {}
+    report = {"missing_rows": [], "empty_refs": [], "class_failures": []}
+
+    for rail in rails:
+        rail_id = _rail_id(rail)
+        row = config.get(rail_id)
+        if not row:
+            report["missing_rows"].append(rail_id)
+            continue
+
+        refs = _actor_ref_candidates(row)
+        if not refs:
+            report["empty_refs"].append(rail_id)
+            continue
+
+        cache_key = "|".join(ref.object_path for ref in refs)
+        rail_cache_keys[rail_id] = cache_key
+        if cache_key in class_cache:
+            continue
+
+        try:
+            actor_class, resolved_ref = _load_first_actor_class(refs)
+            class_cache[cache_key] = actor_class
+            _log(f"Resolved {rail_id} to class {_object_name(actor_class)} via {resolved_ref.object_path}")
+        except Exception as exc:
+            report["class_failures"].append((rail_id, str(exc).splitlines()[0]))
+
+    return class_cache, rail_cache_keys, report
+
+
+def _is_loaded_class(obj) -> bool:
+    try:
+        class_name = obj.get_class().get_name()
     except Exception:
         return False
 
+    if class_name not in ("Class", "BlueprintGeneratedClass"):
+        return False
 
-def _load_static_mesh(ref: RailRef):
-    for path in (ref.object_path, ref.package_path):
-        asset = unreal.EditorAssetLibrary.load_asset(path)
-        if asset:
-            try:
-                mesh = unreal.StaticMesh.cast(asset)
-            except TypeError:
-                mesh = None
-            if mesh:
-                return mesh
-    raise RuntimeError(f"Failed to load StaticMesh for {ref.column_name}: {ref.raw_ref}")
+    try:
+        if hasattr(obj, "is_child_of"):
+            return bool(obj.is_child_of(unreal.Actor))
+    except Exception:
+        pass
+
+    try:
+        default_object = obj.get_default_object()
+        return unreal.Actor.cast(default_object) is not None
+    except Exception:
+        return True
+
+
+def _number_from_json(value: dict, keys: Sequence[str], default: float = 0.0) -> float:
+    if not isinstance(value, dict):
+        return default
+    for key in keys:
+        raw_value = value.get(key)
+        if raw_value is None or raw_value == "":
+            continue
+        try:
+            return float(raw_value)
+        except (TypeError, ValueError):
+            continue
+    return default
 
 
 def _vec_from_json(value: dict) -> unreal.Vector:
     return unreal.Vector(
-        float(value.get("x", 0.0)) * LOCATION_SCALE + LOCATION_OFFSET.x,
-        float(value.get("y", 0.0)) * LOCATION_SCALE + LOCATION_OFFSET.y,
-        float(value.get("z", 0.0)) * LOCATION_SCALE + LOCATION_OFFSET.z,
+        _number_from_json(value, ("x", "X")) * LOCATION_SCALE + LOCATION_OFFSET.x,
+        _number_from_json(value, ("y", "Y")) * LOCATION_SCALE + LOCATION_OFFSET.y,
+        _number_from_json(value, ("z", "Z")) * LOCATION_SCALE + LOCATION_OFFSET.z,
+    )
+
+
+def _vec_from_grid_json(value: dict) -> unreal.Vector:
+    return unreal.Vector(
+        _number_from_json(value, ("x", "X")) * GRID_TO_WORLD * LOCATION_SCALE + LOCATION_OFFSET.x,
+        _number_from_json(value, ("y", "Y")) * GRID_TO_WORLD * LOCATION_SCALE + LOCATION_OFFSET.y,
+        _number_from_json(value, ("z", "Z")) * GRID_TO_WORLD * LOCATION_SCALE + LOCATION_OFFSET.z,
     )
 
 
 def _rot_from_json(value: dict) -> unreal.Rotator:
     return unreal.Rotator(
-        float(value.get("p", 0.0)) + ROTATION_OFFSET.pitch,
-        float(value.get("y", 0.0)) + ROTATION_OFFSET.yaw,
-        float(value.get("r", 0.0)) + ROTATION_OFFSET.roll,
+        _number_from_json(value, ("p", "P", "pitch", "Pitch")) + ROTATION_OFFSET.pitch,
+        _number_from_json(value, ("y", "Y", "yaw", "Yaw")) + ROTATION_OFFSET.yaw,
+        _number_from_json(value, ("r", "R", "roll", "Roll")) + ROTATION_OFFSET.roll,
     )
+
+
+def _rail_location(rail: dict) -> unreal.Vector:
+    for key in ("Pos_Abs", "Location", "Position"):
+        value = rail.get(key)
+        if isinstance(value, dict):
+            return _vec_from_json(value)
+    value = rail.get("Pos_Rev")
+    if isinstance(value, dict):
+        return _vec_from_grid_json(value)
+    return _vec_from_json({})
+
+
+def _rail_rotation(rail: dict) -> unreal.Rotator:
+    for key in ("Rot_Abs", "Rotation", "Rotator"):
+        value = rail.get(key)
+        if isinstance(value, dict):
+            return _rot_from_json(value)
+    return _rot_from_json({})
+
+
+def _set_actor_transform(actor, location: unreal.Vector, rotation: unreal.Rotator) -> None:
+    try:
+        actor.set_actor_location(location, False, False)
+    except TypeError:
+        actor.set_actor_location(location, False)
+    try:
+        actor.set_actor_rotation(rotation, False)
+    except TypeError:
+        actor.set_actor_rotation(rotation)
+
+
+def _position_key(location: unreal.Vector) -> Tuple[float, float, float]:
+    return (round(float(location.x), 3), round(float(location.y), 3), round(float(location.z), 3))
+
+
+def _log_position_summary(rails: Sequence[dict]) -> None:
+    if not rails:
+        return
+
+    positions = [_position_key(_rail_location(rail)) for rail in rails]
+    unique_positions = len(set(positions))
+    first_position = positions[0]
+    if unique_positions == 1 and len(positions) > 1:
+        _warn(
+            "All importable rails parsed to the same location "
+            f"{first_position}; check JSON Pos_Abs/Location fields if they should differ."
+        )
+        return
+
+    _log(f"Parsed rail locations: {unique_positions} unique / {len(positions)} rails; first {first_position}.")
 
 
 def _spawn_actor(actor_class, location: unreal.Vector, rotation: unreal.Rotator, label: str):
@@ -277,14 +749,7 @@ def _spawn_actor(actor_class, location: unreal.Vector, rotation: unreal.Rotator,
         actor.set_folder_path(FOLDER_PATH)
     except Exception:
         pass
-    return actor
-
-
-def _spawn_static_mesh_actor(mesh, location: unreal.Vector, rotation: unreal.Rotator, label: str):
-    actor = _spawn_actor(unreal.StaticMeshActor, location, rotation, label)
-    component = actor.static_mesh_component
-    component.set_static_mesh(mesh)
-    component.set_mobility(unreal.ComponentMobility.STATIC)
+    _set_actor_transform(actor, location, rotation)
     return actor
 
 
@@ -314,7 +779,7 @@ def _clear_existing_folder() -> int:
             folder = str(actor.get_folder_path())
         except Exception:
             folder = ""
-        if folder == FOLDER_PATH and _destroy_actor(actor):
+        if (folder == FOLDER_PATH or folder.startswith(f"{FOLDER_PATH}/")) and _destroy_actor(actor):
             destroyed += 1
     return destroyed
 
@@ -334,6 +799,13 @@ def _set_selected_actors(actors: Sequence) -> None:
 
 def _safe_label(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9_]+", "_", text)
+
+
+def _object_name(obj) -> str:
+    try:
+        return obj.get_name()
+    except Exception:
+        return str(obj)
 
 
 def _grid_extent_from_layout(rails: Sequence[dict]) -> int:
@@ -399,54 +871,168 @@ def _try_set_editor_property(actor, names: Sequence[str], value) -> None:
             pass
 
 
-def import_json_rails(layout_json: Path = DEFAULT_LAYOUT_JSON, rail_config_csv: Path = DEFAULT_RAIL_CONFIG_CSV) -> List:
+def _pick_layout_json() -> Optional[Path]:
+    if not PROMPT_FOR_JSON_ON_RUN:
+        return None
+
+    default_dir = str(Path(LAYOUT_JSON_PATH).parent if LAYOUT_JSON_PATH else DEFAULT_LAYOUT_JSON.parent)
+
+    try:
+        if hasattr(unreal, "DesktopPlatformLibrary"):
+            result = unreal.DesktopPlatformLibrary.open_file_dialog(
+                None,
+                "Select Maze Layout JSON",
+                default_dir,
+                "",
+                "JSON files (*.json)|*.json",
+                0,
+            )
+            paths = result[0] if isinstance(result, tuple) else result
+            if paths:
+                return Path(str(paths[0]))
+    except Exception as exc:
+        _warn(f"Unreal DesktopPlatform file picker unavailable: {exc}")
+
+    picked = _pick_layout_json_windows(default_dir)
+    if picked:
+        return picked
+
+    return None
+
+
+def _pick_layout_json_windows(default_dir: str) -> Optional[Path]:
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception as exc:
+        _warn(f"Windows file picker unavailable: {exc}")
+        return None
+
+    class OPENFILENAMEW(ctypes.Structure):
+        _fields_ = [
+            ("lStructSize", wintypes.DWORD),
+            ("hwndOwner", wintypes.HWND),
+            ("hInstance", wintypes.HINSTANCE),
+            ("lpstrFilter", wintypes.LPCWSTR),
+            ("lpstrCustomFilter", wintypes.LPWSTR),
+            ("nMaxCustFilter", wintypes.DWORD),
+            ("nFilterIndex", wintypes.DWORD),
+            ("lpstrFile", wintypes.LPWSTR),
+            ("nMaxFile", wintypes.DWORD),
+            ("lpstrFileTitle", wintypes.LPWSTR),
+            ("nMaxFileTitle", wintypes.DWORD),
+            ("lpstrInitialDir", wintypes.LPCWSTR),
+            ("lpstrTitle", wintypes.LPCWSTR),
+            ("Flags", wintypes.DWORD),
+            ("nFileOffset", wintypes.WORD),
+            ("nFileExtension", wintypes.WORD),
+            ("lpstrDefExt", wintypes.LPCWSTR),
+            ("lCustData", wintypes.LPARAM),
+            ("lpfnHook", wintypes.LPVOID),
+            ("lpTemplateName", wintypes.LPCWSTR),
+            ("pvReserved", wintypes.LPVOID),
+            ("dwReserved", wintypes.DWORD),
+            ("FlagsEx", wintypes.DWORD),
+        ]
+
+    buffer = ctypes.create_unicode_buffer(32768)
+    ofn = OPENFILENAMEW()
+    ofn.lStructSize = ctypes.sizeof(OPENFILENAMEW)
+    try:
+        ofn.hwndOwner = ctypes.windll.user32.GetActiveWindow()
+    except Exception:
+        ofn.hwndOwner = None
+    ofn.lpstrFilter = "JSON files (*.json)\0*.json\0All files (*.*)\0*.*\0\0"
+    ofn.nFilterIndex = 1
+    ofn.lpstrFile = ctypes.cast(buffer, wintypes.LPWSTR)
+    ofn.nMaxFile = len(buffer)
+    ofn.lpstrInitialDir = default_dir
+    ofn.lpstrTitle = "Select Maze Layout JSON"
+    ofn.lpstrDefExt = "json"
+    ofn.Flags = 0x00000008 | 0x00000800 | 0x00001000
+
+    try:
+        if ctypes.windll.comdlg32.GetOpenFileNameW(ctypes.byref(ofn)):
+            return Path(buffer.value)
+        error_code = ctypes.windll.comdlg32.CommDlgExtendedError()
+        if error_code:
+            _warn(f"Windows file picker failed with CommDlgExtendedError={error_code}.")
+    except Exception as exc:
+        _warn(f"Windows file picker failed: {exc}")
+
+    return None
+
+
+def _resolve_layout_json(layout_json: Optional[Path]) -> Path:
+    if layout_json:
+        return _resolve_path(Path(layout_json))
+
+    if PROMPT_FOR_JSON_ON_RUN:
+        picked = _pick_layout_json()
+        if picked:
+            return picked
+
+    if LAYOUT_JSON_PATH:
+        return _resolve_path(Path(LAYOUT_JSON_PATH))
+
+    raise RuntimeError(
+        "No layout JSON selected. Pick a JSON file in the file dialog, set "
+        "LAYOUT_JSON_PATH at the top of this script, or call import_json_rails(r'path/to/layout.json')."
+    )
+
+
+def _resolve_path(path: Path) -> Path:
+    if path.is_absolute():
+        return path
+    return REPO_ROOT / path
+
+
+def import_json_rails(layout_json: Optional[Path] = None, rail_config_csv: Path = DEFAULT_RAIL_CONFIG_CSV) -> List:
+    layout_json = _resolve_layout_json(layout_json)
     layout = _read_json(layout_json)
     rails = _layout_rails(layout)
     config = _read_rail_config(rail_config_csv)
 
-    _validate_references(rails, config)
+    class_cache, rail_cache_keys, reference_report = _resolve_rail_classes(rails, config)
+    _log_reference_report(reference_report)
+    importable_rails = [_rail for _rail in rails if rail_cache_keys.get(_rail_id(_rail)) in class_cache]
+    skipped_count = len(rails) - len(importable_rails)
+    if not importable_rails:
+        raise RuntimeError("No rails could be resolved to a loadable class; nothing was imported.")
+    if skipped_count:
+        _warn(f"Skipping {skipped_count} unresolved rails; importing {len(importable_rails)} resolved rails.")
 
     destroyed = _clear_existing_folder()
     if destroyed:
         _log(f"Cleared {destroyed} existing actors from folder '{FOLDER_PATH}'.")
 
     spawned = _place_maze_helper_actors(rails)
-    mesh_cache = {}
-    class_cache = {}
-    total_refs = sum(1 if config[_rail_id(rail)].actor_refs else len(config[_rail_id(rail)].mesh_refs) for rail in rails)
+    total_refs = len(importable_rails)
 
     map_meta = layout.get("MapMeta", {})
     level_name = map_meta.get("LevelName", layout_json.stem)
-    _log(f"Placing {len(rails)} rails / {total_refs} actor refs from '{level_name}'.")
+    _log(f"Placing {len(importable_rails)} rails / {total_refs} actor refs from '{level_name}'.")
+    _log_position_summary(importable_rails)
 
     with unreal.ScopedSlowTask(max(1, total_refs), "Importing JSON rails...") as task:
         task.make_dialog(True)
 
-        for rail in rails:
+        for rail in importable_rails:
             if task.should_cancel():
                 break
 
             rail_id = _rail_id(rail)
             rail_index = rail.get("Rail_Index", "?")
-            location = _vec_from_json(rail.get("Pos_Abs") or {})
-            rotation = _rot_from_json(rail.get("Rot_Abs") or {})
-            row = config[rail_id]
+            location = _rail_location(rail)
+            rotation = _rail_rotation(rail)
 
-            if row.actor_refs:
-                ref = row.actor_refs[0]
-                task.enter_progress_frame(1, f"{rail_index}: {rail_id}")
-                if ref.object_path not in class_cache:
-                    class_cache[ref.object_path] = _load_actor_class(ref.object_path)
-                label = f"MazeRail_{rail_index}_{_safe_label(rail_id)}"
-                spawned.append(_spawn_actor(class_cache[ref.object_path], location, rotation, label))
-                continue
+            task.enter_progress_frame(1, f"{rail_index}: {rail_id}")
+            cache_key = rail_cache_keys[rail_id]
 
-            for ref in row.mesh_refs:
-                task.enter_progress_frame(1, f"{rail_index}: {rail_id} / {ref.column_name}")
-                if ref.object_path not in mesh_cache:
-                    mesh_cache[ref.object_path] = _load_static_mesh(ref)
-                label = f"MazeRail_{rail_index}_{_safe_label(rail_id)}_{ref.column_name}"
-                spawned.append(_spawn_static_mesh_actor(mesh_cache[ref.object_path], location, rotation, label))
+            label = f"MazeRail_{rail_index}_{_safe_label(rail_id)}"
+            actor = _spawn_actor(class_cache[cache_key], location, rotation, label)
+            _try_set_editor_property(actor, ("Rail_ID", "RailID", "RailId", "RowName", "RailRowName", "ConfigRowName"), rail_id)
+            spawned.append(actor)
 
     _set_selected_actors(spawned)
     _log(f"Done. Spawned {len(spawned)} actors into folder '{FOLDER_PATH}'.")

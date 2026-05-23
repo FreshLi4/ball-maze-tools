@@ -116,7 +116,7 @@ The default `rail_config.csv` uses the normalized rail config format:
 
 Exported JSON records the generated result: rail IDs, positions, rotations, occupied cells, exits, connections, and `MapMeta` stats such as total difficulty, checkpoint segment difficulties, and spin usage.
 
-Rotation values exported in `Rot_Abs` and `Exit_Rot_Abs` use Unreal transform order:
+Rotation values shown in Rail Detail and exported in `Rot_Abs` / `Exit_Rot_Abs` use Unreal transform order:
 
 ```text
 x = Roll, y = Pitch, z = Yaw

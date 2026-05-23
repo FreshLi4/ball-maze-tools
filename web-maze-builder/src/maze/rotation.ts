@@ -24,3 +24,8 @@ export function rotAbsToUeXyz(rot: RotationInput | undefined): Vec3Dict {
     z: normalized.y,
   };
 }
+
+export function formatRollPitchYaw(rot: RotationInput | undefined): string {
+  const ueRot = rotAbsToUeXyz(rot);
+  return `${ueRot.x} / ${ueRot.y} / ${ueRot.z}`;
+}

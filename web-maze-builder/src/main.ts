@@ -4,7 +4,7 @@ import sampleLayoutRaw from "../maze_layout.json?raw";
 import { loadConfigFromCsv } from "./maze/csv";
 import { calculateOccupiedCellsForConfig, composeRotAbs, exitDirFromLocalRot, MazeGenerator, transformByRotAbs } from "./maze/generator";
 import { buildFamilyDisplayName, parseRailNameParts, railDisplayName } from "./maze/railLibrary";
-import { normalizeRotationInput, rotAbsToUeXyz } from "./maze/rotation";
+import { formatRollPitchYaw, normalizeRotationInput, rotAbsToUeXyz } from "./maze/rotation";
 import { DEFAULT_GENERATOR_OPTIONS, GRID_TO_WORLD_SCALE } from "./maze/constants";
 import { MazeLayout, MazeRailJson, RailConfigItem, RotAbs, Vec3Dict, Vector3 } from "./maze/types";
 import { BuildExitTarget, EditorMode, MazeViewer, RailEditAction, RailMeta } from "./viewer/MazeViewer";
@@ -485,7 +485,7 @@ function renderRailDetail(rail: RailMeta | null): void {
     <div class="detail-row"><span>${markLatin("Type")}</span><strong>${markLatin(railDisplayNameById(rail.type))}</strong></div>
     <div class="detail-row"><span>${markLatin("Rev")}</span><strong>${markLatin(formatVec(rail.posRev))}</strong></div>
     <div class="detail-row"><span>${markLatin("Abs")}</span><strong>${markLatin(formatVec(rail.pos))}</strong></div>
-    <div class="detail-row"><span>${markLatin("Rot")}</span><strong>${markLatin(`${rail.rot.p}/${rail.rot.y}/${rail.rot.r}`)}</strong></div>
+    <div class="detail-row"><span>${markLatin("Roll / Pitch / Yaw")}</span><strong>${markLatin(formatRollPitchYaw(rail.rot))}</strong></div>
     <div class="detail-row"><span>${markLatin("Diff")}</span><strong>${markLatin(rail.diff.toFixed(2))}</strong></div>
     <div class="detail-row"><span>${markLatin("Total Diff")}</span><strong>${markLatin(rail.cumulativeDiff.toFixed(2))}</strong></div>
     <div class="detail-row"><span>${markLatin("Segment Diff")}</span><strong>${markLatin(rail.segmentDiff.toFixed(2))}</strong></div>
@@ -1341,7 +1341,7 @@ interface SaveFilePickerWindow extends Window {
     }>;
   }) => Promise<{
     createWritable: () => Promise<{
-      write: (data: Blob) => Promise<void>;
+      write: (data: Blob | string) => Promise<void>;
       close: () => Promise<void>;
     }>;
   }>;
@@ -1350,6 +1350,7 @@ interface SaveFilePickerWindow extends Window {
 async function downloadLayout(): Promise<void> {
   currentLayout.MapMeta.LevelName = currentLevelName();
   const filename = `${downloadFileStem(currentLayout.MapMeta.LevelName)}.json`;
+  const text = exportLayoutText();
   const saveFilePicker = (window as SaveFilePickerWindow).showSaveFilePicker;
   if (saveFilePicker) {
     try {
@@ -1360,9 +1361,8 @@ async function downloadLayout(): Promise<void> {
           accept: { "application/json": [".json"] },
         }],
       });
-      const blob = exportLayoutBlob();
       const writable = await handle.createWritable();
-      await writable.write(blob);
+      await writable.write(text);
       await writable.close();
       renderLog([{ kind: "success", message: `Saved ${filename}.` }]);
       return;
@@ -1373,7 +1373,7 @@ async function downloadLayout(): Promise<void> {
     }
   }
 
-  const blob = exportLayoutBlob();
+  const blob = new Blob([text], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -1386,7 +1386,11 @@ async function downloadLayout(): Promise<void> {
 }
 
 function exportLayoutBlob(): Blob {
-  return new Blob([JSON.stringify(layoutForExport(currentLayout), null, 2)], { type: "application/json" });
+  return new Blob([exportLayoutText()], { type: "application/json" });
+}
+
+function exportLayoutText(): string {
+  return JSON.stringify(layoutForExport(currentLayout), null, 2);
 }
 
 function downloadFileStem(levelName: string): string {

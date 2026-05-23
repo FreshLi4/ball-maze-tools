@@ -34,13 +34,14 @@ CSV local data -> local footprint/exits -> transform by Rail Rot_Abs -> add Pos_
 
 - CSV/config data is local-space data.
 - `Size_Rev` describes local bounds.
-- Direction names such as `L90`, `R90`, `U90`, `D90` describe local footprint expansion.
-- `Exit_Array` contains local exit position and local exit rotation.
+- `OccupiedCells` is the preferred source for local footprint cells.
+- Direction names such as `L90`, `R90`, `U90`, `D90` describe local footprint expansion only when explicit `OccupiedCells` data is unavailable.
+- `Exits` contains local exit position and local exit rotation. Legacy `Exit_Array` is still supported.
 - World logical occupied cells are computed by rotating local occupied cells by `Rot_Abs`, then adding `Pos_Rev`.
 
 ## Footprint Rules
 
-Generate footprint in local coordinates first.
+Generate footprint in local coordinates first. If the CSV row has `OccupiedCells`, those cells are authoritative. Name-based footprint generation is only a legacy fallback.
 
 - Forward rail: expands along local `+X`.
 - `L90` / `R90`: expands in local `Y`.
@@ -126,6 +127,7 @@ Current asset-specific footprint/exit overrides exist for:
 - `BP_Curve_L90_Borderless_O_X2_Y2_Z1_Rail`
 
 Treat these as temporary compatibility patches. Prefer explicit CSV/config footprint metadata in the long term.
+They must not be applied to rows that already provide explicit `OccupiedCells` or new-format `Exits`.
 
 ## Debugging Direction Bugs
 

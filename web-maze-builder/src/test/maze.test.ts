@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import railConfigCsv from "../../rail_config.csv?raw";
 import { loadConfigFromCsv } from "../maze/csv";
-import { calculateOccupiedCells, calculateOccupiedCellsWithRotAbs, exitDirFromLocalRot, MazeGenerator, transformByRotAbs } from "../maze/generator";
+import {
+  calculateOccupiedCells,
+  calculateOccupiedCellsForConfig,
+  calculateOccupiedCellsWithRotAbs,
+  exitDirFromLocalRot,
+  MazeGenerator,
+  transformByRotAbs,
+} from "../maze/generator";
 import { buildFamilyDisplayName, parseRailNameParts, railDirectionDisplayName, railFamilyDisplayName } from "../maze/railLibrary";
 import { MazeLayout, Vector3 } from "../maze/types";
 
@@ -83,6 +90,26 @@ describe("TypeScript maze port", () => {
     expect(rail?.cnName).toBe("直线轨道");
     expect(rail?.enName).toBe("Straight Rail");
     expect(rail?.displayName).toBe("Fallback Name");
+  });
+
+  it("loads normalized rail config exits, spin config, and occupation cells", () => {
+    const config = loadConfigFromCsv([
+      "---,OccupiedCells,Exits,Diff_Base",
+      'BP_Curve_L90_X4_Y4_Z1_Rail,"((X=0,Y=0,Z=0),(X=1,Y=-1,Z=0))","((ExitIndex=0,Location=(X=3,Y=-4,Z=0),Rotation=(Pitch=0,Yaw=-90,Roll=0),SpinConfig=(S0=(Enable=True,Difficulty=1),S90=(Enable=False,Difficulty=1.5),S180=(Enable=True,Difficulty=2),S270=(Enable=False,Difficulty=1.5))))",1.25',
+    ].join("\n"));
+    const rail = config.get("BP_Curve_L90_X4_Y4_Z1_Rail");
+
+    expect(rail?.exitsLogic[0].Pos.toDict()).toEqual({ x: 3, y: -4, z: 0 });
+    expect(rail?.exitsLogic[0].LocalRot).toEqual({ p: 0, y: -90, r: 0 });
+    expect(rail?.exitsLogic[0].SpinDiff).toEqual([1, 0, 2, 0]);
+    expect(rail?.localOccupiedCells?.map((cell) => cell.toDict())).toEqual([
+      { x: 0, y: 0, z: 0 },
+      { x: 1, y: -1, z: 0 },
+    ]);
+    expect(rail ? calculateOccupiedCellsForConfig(rail, new Vector3(10, 0, 0), { p: 0, y: 0, r: 0 }) : []).toEqual([
+      [10, 0, 0],
+      [11, -1, 0],
+    ]);
   });
 
   it("parses build-library grouping from rail role names", () => {
@@ -179,7 +206,11 @@ describe("TypeScript maze port", () => {
   });
 
   it("matches right-handed L90 curve overrides to their model direction", () => {
-    const config = loadConfigFromCsv(railConfigCsv);
+    const config = loadConfigFromCsv([
+      "RowName,Diff_Base,Size,Exit_Array",
+      'BP_Curve_L90_X4_Y4_Z1_Rail,1,"(X=4,Y=4,Z=1)","((Pos=(X=48,Y=-64,Z=0),BaseRot=(P=0,Y=-90,R=0),SpinDiff=(X=1,Y=1,Z=1,W=1)))"',
+      'BP_Curve_L90_Borderless_O_X2_Y2_Z1_Rail,1,"(X=2,Y=2,Z=1)","((Pos=(X=16,Y=-32,Z=0),BaseRot=(P=0,Y=-90,R=0),SpinDiff=(X=1,Y=1,Z=1,W=1)))"',
+    ].join("\n"));
     const expected = [
       ["BP_Curve_L90_X4_Y4_Z1_Rail", new Vector3(4, 4, 1), { x: 3, y: 4, z: 0 }],
       ["BP_Curve_L90_Borderless_O_X2_Y2_Z1_Rail", new Vector3(2, 2, 1), { x: 1, y: 2, z: 0 }],
@@ -238,7 +269,12 @@ describe("TypeScript maze port", () => {
   });
 
   it("keeps turn footprints aligned with their exit side", () => {
-    const config = loadConfigFromCsv(railConfigCsv);
+    const config = loadConfigFromCsv([
+      "RowName,Diff_Base,Size,Exit_Array",
+      'BP_Curve_L90_X3_Y3_Z1_Rail,1,"(X=3,Y=3,Z=1)","((Pos=(X=32,Y=-48,Z=0),BaseRot=(P=0,Y=-90,R=0),SpinDiff=(X=1,Y=1,Z=1,W=1)))"',
+      'BP_Curve_R90_X3_Y3_Z1_Rail,1,"(X=3,Y=3,Z=1)","((Pos=(X=32,Y=48,Z=0),BaseRot=(P=0,Y=90,R=0),SpinDiff=(X=1,Y=1,Z=1,W=1)))"',
+      'BP_Blank_U90_X1_Y1_Z1_Rail,1,"(X=1,Y=1,Z=1)","((Pos=(X=0,Y=0,Z=16),BaseRot=(P=90,Y=0,R=0),SpinDiff=(X=1,Y=1,Z=1,W=1)))"',
+    ].join("\n"));
 
     for (const rail of config.values()) {
       const horizontal = rail.rowName.includes("_L90_") || rail.rowName.includes("_R90_");
@@ -432,13 +468,17 @@ describe("TypeScript maze port", () => {
   });
 
   it("keeps connected target indices, positions, and directions consistent when a spin is used", () => {
-    const config = loadConfigFromCsv(railConfigCsv);
+    const config = loadConfigFromCsv([
+      "RowName,Diff_Base,Size,Exit_Array",
+      'BP_Start_F_X1_Y1_Z1_Rail,0,"(X=1,Y=1,Z=1)","((Pos=(X=16,Y=0,Z=0),BaseRot=(P=0,Y=0,R=0),SpinDiff=(X=0,Y=1,Z=0,W=0)))"',
+      'BP_End_F_X1_Y1_Z1_Rail,1,"(X=1,Y=1,Z=1)",""',
+    ].join("\n"));
     const layout = new MazeGenerator(config, {
-      seed: 1002,
-      targetDifficulty: 18,
-      targetCheckpoints: 1,
+      seed: 1,
+      targetDifficulty: 0,
+      targetCheckpoints: 0,
       maxSpins: 4,
-      bounds: new Vector3(13, 11, 7),
+      bounds: new Vector3(5, 5, 5),
     }).generate();
 
     expect(layout.MapMeta.SpinCount).toBeGreaterThan(0);

@@ -2,7 +2,7 @@ import gsap from "gsap";
 import railConfigCsv from "../rail_config.csv?raw";
 import sampleLayoutRaw from "../maze_layout.json?raw";
 import { loadConfigFromCsv } from "./maze/csv";
-import { calculateOccupiedCellsWithRotAbs, composeRotAbs, exitDirFromLocalRot, MazeGenerator, transformByRotAbs } from "./maze/generator";
+import { calculateOccupiedCellsForConfig, composeRotAbs, exitDirFromLocalRot, MazeGenerator, transformByRotAbs } from "./maze/generator";
 import { buildFamilyDisplayName, parseRailNameParts, railDisplayName } from "./maze/railLibrary";
 import { DEFAULT_GENERATOR_OPTIONS, GRID_TO_WORLD_SCALE } from "./maze/constants";
 import { MazeLayout, MazeRailJson, RailConfigItem, RotAbs, Vec3Dict, Vector3 } from "./maze/types";
@@ -735,7 +735,7 @@ function recalculateRailGeometry(rail: MazeRailJson): MazeRailJson {
   if (!config) return rail;
   const posRev = vectorFromDict(rail.Pos_Rev);
   const rotAbs = normalizeRot(rail.Rot_Abs);
-  const occupiedCells = calculateOccupiedCellsWithRotAbs(rail.Rail_ID, posRev, vectorFromDict(rail.Size_Rev), rotAbs)
+  const occupiedCells = calculateOccupiedCellsForConfig(config, posRev, rotAbs)
     .map(([x, y, z]) => ({ x, y, z }));
   const previousExits = rail.Exit;
   const exits = config.exitsLogic.map((exit, index) => {
@@ -892,7 +892,7 @@ function createBuildRail(target: BuildExitTarget): { rail: MazeRailJson | null; 
 
   const posRev = vectorFromDict(parentExit.Exit_Pos_Rev);
   const rotAbs = normalizeRot(composeRotAbs(parentExit.Exit_Rot_Abs, { p: 0, y: 0, r: buildSelection.spin * 90 }));
-  const occupiedTuples = calculateOccupiedCellsWithRotAbs(railConfig.rowName, posRev, railConfig.sizeRev, rotAbs);
+  const occupiedTuples = calculateOccupiedCellsForConfig(railConfig, posRev, rotAbs);
   const occupiedCells = occupiedTuples.map(([x, y, z]) => ({ x, y, z }));
   const boundsFailure = firstOutOfBoundsCell(occupiedCells);
   if (boundsFailure) return { rail: null, reason: `Out of bounds at ${formatVec(boundsFailure)}.` };

@@ -27,6 +27,8 @@ export interface RailConfigItem {
   diffBase: number;
   sizeRev: Vector3;
   exitsLogic: ExitLogic[];
+  localOccupiedCells?: Vector3[];
+  hasExplicitGeometry?: boolean;
   isEnd: boolean;
   isStart: boolean;
   isCheckpoint: boolean;

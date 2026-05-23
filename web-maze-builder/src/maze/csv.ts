@@ -116,34 +116,178 @@ function parseSize(row: Record<string, string>, name: string): Vector3 {
   return new Vector3(1, 1, 1);
 }
 
-function parseSpinDiff(text: string, startIndex: number): number[] {
-  const spinMatch = text.slice(startIndex).match(/SpinDiff=\(X=([\d.-]+),Y=([\d.-]+),Z=([\d.-]+),W=([\d.-]+)\)/);
-  if (!spinMatch) return [1, 1, 1, 1];
+const NUMBER_PATTERN = "[-+]?\\d*\\.?\\d+(?:[eE][-+]?\\d+)?";
+
+function stripOuterParentheses(value: string): string {
+  const text = value.trim();
+  if (!text.startsWith("(") || !text.endsWith(")")) return text;
+
+  let depth = 0;
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === '"') inQuotes = !inQuotes;
+    if (inQuotes) continue;
+    if (ch === "(") depth += 1;
+    if (ch === ")") depth -= 1;
+    if (depth === 0 && i < text.length - 1) return text;
+  }
+
+  return text.slice(1, -1).trim();
+}
+
+function topLevelParenthesizedItems(value: string): string[] {
+  const text = stripOuterParentheses(value);
+  const items: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === '"') inQuotes = !inQuotes;
+    if (inQuotes) continue;
+
+    if (ch === "(") {
+      if (depth === 0) start = i + 1;
+      depth += 1;
+    } else if (ch === ")") {
+      depth -= 1;
+      if (depth === 0 && start !== -1) {
+        items.push(text.slice(start, i).trim());
+        start = -1;
+      }
+    }
+  }
+
+  if (items.length > 0) return items.filter(Boolean);
+  return text ? [stripOuterParentheses(text)] : [];
+}
+
+function parenthesizedAssignment(text: string, keys: string[]): { key: string; value: string } | null {
+  const lowerText = text.toLowerCase();
+  for (const key of keys) {
+    const marker = `${key.toLowerCase()}=`;
+    const markerIndex = lowerText.indexOf(marker);
+    if (markerIndex === -1) continue;
+
+    const openIndex = markerIndex + marker.length;
+    if (text[openIndex] !== "(") continue;
+
+    let depth = 0;
+    let inQuotes = false;
+    for (let i = openIndex; i < text.length; i += 1) {
+      const ch = text[i];
+      if (ch === '"') inQuotes = !inQuotes;
+      if (inQuotes) continue;
+
+      if (ch === "(") depth += 1;
+      if (ch === ")") {
+        depth -= 1;
+        if (depth === 0) return { key, value: text.slice(openIndex + 1, i).trim() };
+      }
+    }
+  }
+
+  return null;
+}
+
+function namedNumber(text: string, names: string[]): number | null {
+  for (const name of names) {
+    const match = text.match(new RegExp(`(?:^|[,\\s(])${name}\\s*=\\s*(${NUMBER_PATTERN})`, "i"));
+    if (!match) continue;
+    const value = Number(match[1]);
+    if (Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+function parseVectorLiteral(text: string): Vector3 | null {
+  const clean = stripOuterParentheses(text);
+  const x = namedNumber(clean, ["X"]);
+  const y = namedNumber(clean, ["Y"]);
+  const z = namedNumber(clean, ["Z"]);
+  if (x !== null && y !== null && z !== null) {
+    return new Vector3(Math.round(x), Math.round(y), Math.round(z));
+  }
+
+  const bare = clean
+    .split(",")
+    .map((value) => Number(value.trim()))
+    .filter((value) => Number.isFinite(value));
+  if (bare.length >= 3) return new Vector3(Math.round(bare[0]), Math.round(bare[1]), Math.round(bare[2]));
+  return null;
+}
+
+function parseRotLiteral(text: string): RotAbs {
+  return {
+    p: namedNumber(text, ["Pitch", "P"]) ?? 0,
+    y: namedNumber(text, ["Yaw", "Y"]) ?? 0,
+    r: namedNumber(text, ["Roll", "R"]) ?? 0,
+  };
+}
+
+function parseLegacySpinDiff(text: string): number[] | null {
+  const spinMatch = text.match(
+    new RegExp(`SpinDiff=\\(X=(${NUMBER_PATTERN}),Y=(${NUMBER_PATTERN}),Z=(${NUMBER_PATTERN}),W=(${NUMBER_PATTERN})\\)`, "i"),
+  );
+  if (!spinMatch) return null;
   return spinMatch.slice(1).map((value) => Number(value));
 }
 
-function parseExitArray(exitStr: string) {
-  const exits = [];
-  const pattern =
-    /Pos=\(X=([\d.-]+),Y=([\d.-]+),Z=([\d.-]+)\),BaseRot=\(P=([\d.-]+),Y=([\d.-]+),R=([\d.-]+)\)/g;
-  let match: RegExpExecArray | null;
+function parseSpinConfig(text: string): number[] | null {
+  const spinConfig = parenthesizedAssignment(text, ["SpinConfig"]);
+  if (!spinConfig) return null;
+  return ["S0", "S90", "S180", "S270"].map((key) => {
+    const spinItem = parenthesizedAssignment(spinConfig.value, [key]);
+    if (!spinItem) return 0;
+    const enableMatch = spinItem.value.match(/Enable\s*=\s*([^,)]+)/i);
+    const enabled = enableMatch ? /^(true|1|yes)$/i.test(enableMatch[1].trim()) : true;
+    if (!enabled) return 0;
+    return namedNumber(spinItem.value, ["Difficulty"]) ?? 1;
+  });
+}
 
-  while ((match = pattern.exec(exitStr)) !== null) {
-    const [px, py, pz, rp, ry, rr] = match.slice(1).map((value) => Number(value));
-    const localRot: RotAbs = { p: rp, y: ry, r: rr };
-    exits.push({
-      Pos: new Vector3(
-        Math.round(px / GRID_TO_WORLD_SCALE),
-        Math.round(py / GRID_TO_WORLD_SCALE),
-        Math.round(pz / GRID_TO_WORLD_SCALE),
-      ),
-      RotOffset: Math.trunc(ry / 90) % 4,
-      LocalRot: localRot,
-      SpinDiff: parseSpinDiff(exitStr, pattern.lastIndex),
-    });
-  }
+function parseExitArray(exitStr: string): ExitLogic[] {
+  return topLevelParenthesizedItems(exitStr)
+    .map((item, order) => {
+      const posAssignment = parenthesizedAssignment(item, ["Location", "Pos"]);
+      const rotAssignment = parenthesizedAssignment(item, ["Rotation", "BaseRot"]);
+      if (!posAssignment || !rotAssignment) return null;
 
-  return exits;
+      const parsedPos = parseVectorLiteral(posAssignment.value);
+      if (!parsedPos) return null;
+      const pos =
+        posAssignment.key.toLowerCase() === "pos"
+          ? new Vector3(
+              Math.round(parsedPos.x / GRID_TO_WORLD_SCALE),
+              Math.round(parsedPos.y / GRID_TO_WORLD_SCALE),
+              Math.round(parsedPos.z / GRID_TO_WORLD_SCALE),
+            )
+          : parsedPos;
+
+      const localRot = parseRotLiteral(rotAssignment.value);
+      return {
+        order,
+        exitIndex: namedNumber(item, ["ExitIndex"]),
+        exit: {
+          Pos: pos,
+          RotOffset: Math.trunc(localRot.y / 90) % 4,
+          LocalRot: localRot,
+          SpinDiff: parseSpinConfig(item) ?? parseLegacySpinDiff(item) ?? defaultSpinDiff(),
+        },
+      };
+    })
+    .filter((item): item is { order: number; exitIndex: number | null; exit: ExitLogic } => item !== null)
+    .sort((a, b) => (a.exitIndex ?? a.order) - (b.exitIndex ?? b.order))
+    .map((item) => item.exit);
+}
+
+function parseOccupiedCells(cellsText: string | undefined): Vector3[] {
+  if (!cellsText) return [];
+  return topLevelParenthesizedItems(cellsText)
+    .map(parseVectorLiteral)
+    .filter((cell): cell is Vector3 => cell !== null);
 }
 
 function defaultSpinDiff(): number[] {
@@ -188,6 +332,7 @@ const RIGHT_HANDED_L90_EXIT_OVERRIDES = new Set([
 ]);
 
 function normalizeRailConfigItem(item: RailConfigItem): RailConfigItem {
+  if (item.hasExplicitGeometry) return item;
   if (!RIGHT_HANDED_L90_EXIT_OVERRIDES.has(item.rowName)) return item;
 
   return {
@@ -213,12 +358,16 @@ export function loadConfigFromCsv(csvText: string): Map<string, RailConfigItem> 
 
   for (const columns of rows.slice(1)) {
     const row = Object.fromEntries(headers.map((header, index) => [header, columns[index] ?? ""]));
-    const rowName = getRowValue(row, ["RowName", "Name"]);
+    const rowName = getRowValue(row, ["RowName", "Name", "---"]);
     if (!rowName) continue;
 
     const diffBase = normalizeNumber(getRowValue(row, ["Diff_Base", "Difficulty"]), 0);
     const sizeRev = parseSize(row, rowName);
-    let exitsLogic = row.Exit_Array ? parseExitArray(row.Exit_Array) : [];
+    const occupiedCells = parseOccupiedCells(getRowValue(row, ["OccupiedCells", "Occupied_Cells", "Occupation"]));
+    const exitText = getRowValue(row, ["Exits", "ExitArray", "Exit_Array"]);
+    const hasNewExitFormat = !!exitText && /\b(Location|Rotation|SpinConfig|ExitIndex)\s*=/i.test(exitText);
+    const hasExplicitGeometry = hasNewExitFormat || occupiedCells.length > 0;
+    let exitsLogic = exitText ? parseExitArray(exitText) : [];
 
     if (exitsLogic.length === 0) {
       exitsLogic = [1, 2, 3]
@@ -242,7 +391,7 @@ export function loadConfigFromCsv(csvText: string): Map<string, RailConfigItem> 
     }
 
     const inferredExits = inferExitsFromRailName(rowName, sizeRev);
-    if (inferredExits.length > exitsLogic.length) {
+    if (!hasExplicitGeometry && inferredExits.length > exitsLogic.length) {
       exitsLogic = inferredExits;
     }
 
@@ -270,6 +419,8 @@ export function loadConfigFromCsv(csvText: string): Map<string, RailConfigItem> 
       diffBase,
       sizeRev,
       exitsLogic,
+      localOccupiedCells: occupiedCells.length > 0 ? occupiedCells : undefined,
+      hasExplicitGeometry,
       isEnd: railType.includes("end"),
       isStart: railType.includes("start"),
       isCheckpoint: railType.includes("checkpoint"),

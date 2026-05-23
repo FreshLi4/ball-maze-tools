@@ -119,6 +119,22 @@ export function calculateOccupiedCellsWithRotAbs(
   });
 }
 
+export function localOccupiedCellsForConfig(config: RailConfigItem): Vector3[] {
+  if (config.localOccupiedCells?.length) return config.localOccupiedCells.map((cell) => cell.clone());
+  return calculateLocalOccupiedCells(config.rowName, config.sizeRev);
+}
+
+export function calculateOccupiedCellsForConfig(
+  config: RailConfigItem,
+  pos: Vector3,
+  rotAbs: RotAbs,
+): [number, number, number][] {
+  return localOccupiedCellsForConfig(config).map((cell) => {
+    const rotated = transformByRotAbs(cell, rotAbs);
+    return [pos.x + rotated.x, pos.y + rotated.y, pos.z + rotated.z];
+  });
+}
+
 export function calculateLocalOccupiedCells(railId: string, size: Vector3): Vector3[] {
   let yMin = 0;
   let yMax = 0;
@@ -452,7 +468,7 @@ export class MazeGenerator {
     roll = 0,
   ): RailInstance | string {
     const cfg = this.requireConfig(railId);
-    const expectedCells = calculateOccupiedCellsWithRotAbs(railId, pos, cfg.sizeRev, rotAbs);
+    const expectedCells = calculateOccupiedCellsForConfig(cfg, pos, rotAbs);
     const collision = this.findCollision(expectedCells);
     if (collision !== null) return `Collision with Rail ${collision}`;
     if (!this.isInBounds(expectedCells)) return "OutOfBounds";

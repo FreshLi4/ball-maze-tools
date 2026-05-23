@@ -100,6 +100,18 @@ maze = generate(seed, rail_config_csv, target_difficulty, checkpoints, max_spins
 
 Seed controls random choices such as start rail, start position, open connector selection, candidate rail order, and retry order. CSV and code still define rail sizes, exits, difficulty, collision, bounds, and rotations.
 
+## Rail Config CSV
+
+The default `rail_config.csv` uses the normalized rail config format:
+
+- `---`: row name / rail ID.
+- `OccupiedCells`: local occupied grid cells, for example `((X=0,Y=0,Z=0),(X=1,Y=0,Z=0))`.
+- `Exits`: local exit definitions with `Location`, `Rotation`, and `SpinConfig`.
+- `Diff_Base`: base difficulty for the rail.
+- `RailClassRef`: Unreal Blueprint class reference used by importer tooling.
+
+`OccupiedCells` and new-format `Exits` are authoritative. Legacy configs with `RowName`, `Size`, `Exit_Array`, and `SpinDiff` are still accepted; for those rows Maze Builder falls back to name-pattern footprint inference and compatibility overrides when needed.
+
 ## Output
 
 Exported JSON records the generated result: rail IDs, positions, rotations, occupied cells, exits, connections, and `MapMeta` stats such as total difficulty, checkpoint segment difficulties, and spin usage.

@@ -1,6 +1,6 @@
 # Maze Builder Progress
 
-Last updated: 2026-05-13
+Last updated: 2026-05-23
 
 ## Scope
 
@@ -49,6 +49,10 @@ Current work focuses on the TypeScript/Vite generator and viewer in `src/`. The 
 
 ### Direction and Footprint Work
 
+- Updated the default `rail_config.csv` to the normalized rail config format with `OccupiedCells`, `Exits`, `RailClassRef`, and `SpinConfig`.
+- Added parser support for the new `---` row-name column, normalized `Location` / `Rotation` exits, per-spin enable/difficulty values, and explicit occupation cells.
+- Explicit config geometry now wins over name-pattern inference and legacy asset-specific L90 overrides.
+- Generator placement, existing layout geometry recalculation, and manual build preview now use config-provided occupation cells when available.
 - Added known asset overrides:
   - `BP_Curve_L90_X4_Y4_Z1_Rail`
   - `BP_Curve_L90_Borderless_O_X2_Y2_Z1_Rail`
@@ -59,7 +63,7 @@ Current work focuses on the TypeScript/Vite generator and viewer in `src/`. The 
   - translate by `Pos_Rev`.
 - Added `calculateLocalOccupiedCells`.
 - Added `calculateOccupiedCellsWithRotAbs`.
-- `placeRailV2` now uses `calculateOccupiedCellsWithRotAbs` for collision and bounds.
+- `placeRailV2` now uses config-aware occupied cells for collision and bounds.
 - Removed the incorrect `BP_Curve_R90_X3_Y3_Z1_Rail` footprint override so R90 X3 occupied cells stay on the same side as its local exit before and after full `Rot_Abs`.
 
 ### Documentation
@@ -77,7 +81,7 @@ npm test
 npm run build
 ```
 
-Historical status before doc split: 16 passing tests.
+Latest checked status: 26 passing tests.
 
 ## Important Context
 
@@ -97,8 +101,7 @@ Everything should use `Pos_Rev + Rot_Abs` as the single authoritative rail pose.
 
 ## Known Risks / Next Work
 
-- Some legacy tests still use `calculateOccupiedCells`, which now delegates to `calculateOccupiedCellsWithRotAbs`.
-- Local footprint rules are still name-pattern based.
-- Asset-level overrides are temporary; long term, CSV should encode true footprint side/shape explicitly.
+- Some legacy tests still cover name-pattern fallback through `calculateOccupiedCells`.
+- Name-pattern footprint rules and asset-level overrides are now fallback behavior for old configs only.
 - The viewer draws proxy boxes, not real mesh geometry.
 - Visual disagreements with UE meshes may still happen if local footprint data is inaccurate.

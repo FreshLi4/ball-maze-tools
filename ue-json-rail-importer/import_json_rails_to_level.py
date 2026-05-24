@@ -159,8 +159,27 @@ def _read_rail_config_from_csv(csv_path: Path) -> Dict[str, RailConfigRow]:
     return config
 
 
+def _get_csv_cell(row: dict, name: str) -> str:
+    """
+    Unreal DataTable CSV exports sometimes use display names (e.g. "Rail Class Ref")
+    instead of the raw property name ("RailClassRef"). This helper matches keys by
+    a normalized form (lowercase + alnum only).
+    """
+    if row is None:
+        return ""
+    if name in row:
+        value = row.get(name)
+        return "" if value is None else str(value)
+
+    target = _normalize_property_name(name)
+    for key, value in row.items():
+        if _normalize_property_name(str(key)) == target:
+            return "" if value is None else str(value)
+    return ""
+
+
 def _add_config_row_from_csv_dict(config: Dict[str, RailConfigRow], row: dict, row_number: int, source_name: str) -> None:
-    row_name = (row.get("RowName") or row.get("Name") or row.get("---") or "").strip()
+    row_name = (_get_csv_cell(row, "RowName") or _get_csv_cell(row, "Row Name") or _get_csv_cell(row, "Name") or _get_csv_cell(row, "---") or "").strip()
     if not row_name:
         if _is_blank_csv_row(row):
             return
@@ -171,14 +190,14 @@ def _add_config_row_from_csv_dict(config: Dict[str, RailConfigRow], row: dict, r
     mesh_refs: List[RailRef] = []
 
     for column_name in RAIL_CLASS_COLUMNS:
-        raw_ref = (row.get(column_name) or "").strip()
+        raw_ref = _get_csv_cell(row, column_name).strip()
         normalized = _normalize_asset_ref(raw_ref)
         if normalized:
             object_path, package_path = normalized
             actor_refs.append(RailRef(column_name, raw_ref, object_path, package_path, True))
 
     for column_name in RAIL_PART_COLUMNS:
-        raw_ref = (row.get(column_name) or "").strip()
+        raw_ref = _get_csv_cell(row, column_name).strip()
         normalized = _normalize_asset_ref(raw_ref)
         if normalized:
             object_path, package_path = normalized
@@ -581,11 +600,62 @@ def _actor_ref_candidates(config_row: RailConfigRow) -> List[RailRef]:
     return config_row.actor_refs or config_row.derived_actor_refs
 
 
+def _strip_unreal_quotes(value: str) -> str:
+    if not value:
+        return ""
+    quoted = re.search(r"'([^']+)'", str(value))
+    return quoted.group(1).strip() if quoted else str(value).strip()
+
+
+def _to_asset_registry_object_path(candidate: str) -> str:
+    """
+    Convert various "/Game/..." reference strings into an Asset Registry object path:
+    - "/Game/A/BP_Name.BP_Name_C" -> "/Game/A/BP_Name.BP_Name"
+    - "/Game/A/BP_Name.BP_Name"   -> "/Game/A/BP_Name.BP_Name"
+    - "/Game/A/BP_Name"          -> "/Game/A/BP_Name.BP_Name"
+    """
+    value = _strip_unreal_quotes(candidate)
+    if not value.startswith("/Game/"):
+        return ""
+
+    if "." not in value:
+        asset_name = value.rsplit("/", 1)[-1]
+        return f"{value}.{asset_name}"
+
+    if value.endswith("_C"):
+        return value[:-2]
+
+    return value
+
+
+def _asset_registry_has_object_path(object_path: str) -> bool:
+    if not object_path:
+        return False
+    try:
+        registry = unreal.AssetRegistryHelpers.get_asset_registry()
+        if hasattr(unreal, "SoftObjectPath"):
+            data = registry.get_asset_by_object_path(unreal.SoftObjectPath(object_path))
+        else:
+            data = registry.get_asset_by_object_path(object_path)
+        return bool(data) and bool(getattr(data, "is_valid", lambda: True)())
+    except Exception:
+        # If registry probing is unavailable for this UE build, fall back to attempting loads.
+        return True
+
+
 def _load_actor_class(path: str):
     if not path:
         return None
 
+    # Avoid spamming UE log with linker/load errors when the asset is clearly absent.
+    base_object_path = _to_asset_registry_object_path(path)
+    if base_object_path and not _asset_registry_has_object_path(base_object_path):
+        raise RuntimeError(f"Asset not found in registry: {base_object_path}")
+
     for candidate in _class_path_candidates(path):
+        object_path = _to_asset_registry_object_path(candidate)
+        if object_path and not _asset_registry_has_object_path(object_path):
+            continue
         try:
             obj = unreal.load_object(None, candidate)
             actor_class = _coerce_actor_class(obj)
@@ -677,19 +747,32 @@ def _load_first_actor_class(refs: Sequence[RailRef]):
     raise RuntimeError("Failed to load any BP/Class candidate:\n" + "\n".join(failures[:8]))
 
 
-def _resolve_rail_classes(rails: Sequence[dict], config: Dict[str, RailConfigRow]) -> Tuple[Dict[str, object], Dict[str, str], dict]:
+def _resolve_rail_classes(
+    rails: Sequence[dict],
+    primary_config: Dict[str, RailConfigRow],
+    fallback_config: Optional[Dict[str, RailConfigRow]] = None,
+) -> Tuple[Dict[str, object], Dict[str, str], dict]:
     class_cache = {}
     rail_cache_keys = {}
-    report = {"missing_rows": [], "empty_refs": [], "class_failures": []}
+    report = {"missing_rows": [], "empty_refs": [], "class_failures": [], "found_via_fallback": []}
 
     for rail in rails:
         rail_id = _rail_id(rail)
-        row = config.get(rail_id)
+        row = primary_config.get(rail_id)
+        refs: List[RailRef] = _actor_ref_candidates(row) if row else []
+
+        if not refs and fallback_config:
+            fallback_row = fallback_config.get(rail_id)
+            fallback_refs: List[RailRef] = _actor_ref_candidates(fallback_row) if fallback_row else []
+            if fallback_refs:
+                row = fallback_row
+                refs = fallback_refs
+                report["found_via_fallback"].append(rail_id)
+
         if not row:
             report["missing_rows"].append(rail_id)
             continue
 
-        refs = _actor_ref_candidates(row)
         if not refs:
             report["empty_refs"].append(rail_id)
             continue
@@ -934,7 +1017,14 @@ def _place_maze_helper_actors(rails: Sequence[dict]) -> List:
     spawned = []
 
     if BP_MAZE_CLASS_PATH:
-        spawned.append(_spawn_actor(_load_actor_class(BP_MAZE_CLASS_PATH), unreal.Vector(0.0, 0.0, 0.0), unreal.Rotator(0.0, 0.0, 0.0), "BP_Maze"))
+        spawned.append(
+            _spawn_actor(
+                _load_actor_class(BP_MAZE_CLASS_PATH),
+                unreal.Vector(0.0, 0.0, 0.0),
+                unreal.Rotator(pitch=0.0, yaw=0.0, roll=0.0),
+                "BP_Maze",
+            )
+        )
     else:
         _warn("BP_MAZE_CLASS_PATH is empty; BP_Maze was not placed.")
 
@@ -942,7 +1032,12 @@ def _place_maze_helper_actors(rails: Sequence[dict]) -> List:
     boundary_half_cm = ((grid_size - 1) * 0.5 * GRID_TO_WORLD) + 8.0
 
     if BP_MAZE_BOUNDARY_CLASS_PATH:
-        actor = _spawn_actor(_load_actor_class(BP_MAZE_BOUNDARY_CLASS_PATH), unreal.Vector(0.0, 0.0, 0.0), unreal.Rotator(0.0, 0.0, 0.0), "BP_MazeBoundary")
+        actor = _spawn_actor(
+            _load_actor_class(BP_MAZE_BOUNDARY_CLASS_PATH),
+            unreal.Vector(0.0, 0.0, 0.0),
+            unreal.Rotator(pitch=0.0, yaw=0.0, roll=0.0),
+            "BP_MazeBoundary",
+        )
         _try_set_editor_property(actor, ("BoundaryHalfSize", "HalfSize", "MazeHalfSize", "Size"), boundary_half_cm)
         spawned.append(actor)
     else:
@@ -951,7 +1046,14 @@ def _place_maze_helper_actors(rails: Sequence[dict]) -> List:
     bottom_type, bottom_z = _bottom_spec_from_maze_grid(grid_size)
     bottom_path = BP_MAZE_BOTTOM_CLASS_PATHS.get(bottom_type, "")
     if bottom_path:
-        spawned.append(_spawn_actor(_load_actor_class(bottom_path), unreal.Vector(0.0, 0.0, bottom_z), unreal.Rotator(0.0, 0.0, 0.0), f"BP_MazeBottom_{bottom_type}"))
+        spawned.append(
+            _spawn_actor(
+                _load_actor_class(bottom_path),
+                unreal.Vector(0.0, 0.0, bottom_z),
+                unreal.Rotator(pitch=0.0, yaw=0.0, roll=0.0),
+                f"BP_MazeBottom_{bottom_type}",
+            )
+        )
     else:
         _warn(f"BP_MAZE_BOTTOM_CLASS_PATHS['{bottom_type}'] is empty; BP_MazeBottom was not placed.")
 
@@ -1087,16 +1189,62 @@ def import_json_rails(layout_json: Optional[Path] = None, rail_config_csv: Path 
     layout_json = _resolve_layout_json(layout_json)
     layout = _read_json(layout_json)
     rails = _layout_rails(layout)
-    config = _read_rail_config(rail_config_csv)
+    unique_rail_ids = sorted({_rail_id(rail) for rail in rails})
 
-    class_cache, rail_cache_keys, reference_report = _resolve_rail_classes(rails, config)
-    _log_reference_report(reference_report)
+    data_table_config = _read_rail_config_from_data_table()
+    csv_config = _read_rail_config_from_csv(rail_config_csv)
+
+    # Primary definition is the in-project DataTable when available; fall back to CSV otherwise.
+    primary_config = data_table_config if data_table_config else csv_config
+    fallback_config = csv_config if data_table_config else None
+
+    # 1) Preflight: unique rails required by this JSON.
+    _log(f"[Preflight] Unique rails in JSON: {len(unique_rail_ids)}")
+
+    # 2) Preflight reporting (Definition = primary config, usually DT_RailConfig).
+    missing_rail_in_def = [rail_id for rail_id in unique_rail_ids if rail_id not in primary_config]
+    missing_ref_in_def = []
+    for rail_id in unique_rail_ids:
+        if rail_id in missing_rail_in_def:
+            continue
+        row = primary_config.get(rail_id)
+        if row and not _actor_ref_candidates(row):
+            missing_ref_in_def.append(rail_id)
+
+    # Treat maze helper BP paths as "Missing Ref in Definition" as well.
+    missing_maze_helpers = []
+    if not BP_MAZE_CLASS_PATH:
+        missing_maze_helpers.append("BP_Maze")
+    if not BP_MAZE_BOUNDARY_CLASS_PATH:
+        missing_maze_helpers.append("BP_MazeBoundary")
+    bottom_type, _bottom_z = _bottom_spec_from_maze_grid(_grid_extent_from_layout(rails))
+    if not BP_MAZE_BOTTOM_CLASS_PATHS.get(bottom_type, ""):
+        missing_maze_helpers.append(f"BP_MazeBottom_{bottom_type}")
+
+    def _log_numbered_section(title: str, items: Sequence[str]) -> None:
+        _warn(title)
+        if not items:
+            _warn("  (none)")
+            return
+        for idx, item in enumerate(items, start=1):
+            _warn(f"{idx}. {item}")
+
+    _log_numbered_section("# Missing Rail in Definition:", missing_rail_in_def)
+    _log_numbered_section("# Missing Ref in Definition:", sorted(set(missing_ref_in_def + missing_maze_helpers)))
+
+    # 3) Resolve using the primary definition, with an optional CSV fallback for missing/empty refs.
+    class_cache, rail_cache_keys, reference_report = _resolve_rail_classes(rails, primary_config, fallback_config)
+    found_via_csv = sorted(set(reference_report.get("found_via_fallback", [])))
+    _log_numbered_section("# Find Rail via CSV", found_via_csv)
+
     importable_rails = [_rail for _rail in rails if rail_cache_keys.get(_rail_id(_rail)) in class_cache]
+
     skipped_count = len(rails) - len(importable_rails)
     if not importable_rails:
         raise RuntimeError("No rails could be resolved to a loadable class; nothing was imported.")
     if skipped_count:
         _warn(f"Skipping {skipped_count} unresolved rails; importing {len(importable_rails)} resolved rails.")
+
 
     destroyed = _clear_existing_folder()
     if destroyed:

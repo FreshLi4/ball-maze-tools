@@ -47,6 +47,11 @@ LOCATION_SCALE = 1.0
 LOCATION_OFFSET = unreal.Vector(0.0, 0.0, 0.0)
 ROTATION_OFFSET = unreal.Rotator(0.0, 0.0, 0.0)
 
+# web-maze-builder exports UE-ready Roll/Pitch/Yaw values. Leave this disabled for
+# current exports; enable only when importing legacy files that still stored viewer
+# internal rotations without the Y-mirror handedness conversion.
+MIRROR_VIEWER_Y_AXIS = False
+
 # Fill these once the project-side Blueprint references are settled.
 BP_MAZE_CLASS_PATH = ""
 BP_MAZE_BOUNDARY_CLASS_PATH = ""
@@ -757,16 +762,26 @@ def _vec_from_grid_json(value: dict) -> unreal.Vector:
 
 
 def _rot_from_json(value: dict) -> unreal.Rotator:
+    # IMPORTANT: Use keyword args for unreal.Rotator. Different UE Python bindings may
+    # interpret positional args as (Roll, Pitch, Yaw) instead of (Pitch, Yaw, Roll),
+    # which would swap axes (e.g. roll=90 becomes yaw=90).
     if isinstance(value, dict) and any(key in value for key in ("x", "X", "z", "Z")):
-        return unreal.Rotator(
-            _number_from_json(value, ("y", "Y", "pitch", "Pitch", "p", "P")) + ROTATION_OFFSET.pitch,
-            _number_from_json(value, ("z", "Z", "yaw", "Yaw")) + ROTATION_OFFSET.yaw,
-            _number_from_json(value, ("x", "X", "roll", "Roll", "r", "R")) + ROTATION_OFFSET.roll,
-        )
+        pitch = _number_from_json(value, ("y", "Y", "pitch", "Pitch", "p", "P"))
+        yaw = _number_from_json(value, ("z", "Z", "yaw", "Yaw"))
+        roll = _number_from_json(value, ("x", "X", "roll", "Roll", "r", "R"))
+    else:
+        pitch = _number_from_json(value, ("p", "P", "pitch", "Pitch"))
+        yaw = _number_from_json(value, ("y", "Y", "yaw", "Yaw"))
+        roll = _number_from_json(value, ("r", "R", "roll", "Roll"))
+
+    if MIRROR_VIEWER_Y_AXIS:
+        yaw = -yaw
+        roll = -roll
+
     return unreal.Rotator(
-        _number_from_json(value, ("p", "P", "pitch", "Pitch")) + ROTATION_OFFSET.pitch,
-        _number_from_json(value, ("y", "Y", "yaw", "Yaw")) + ROTATION_OFFSET.yaw,
-        _number_from_json(value, ("r", "R", "roll", "Roll")) + ROTATION_OFFSET.roll,
+        pitch=pitch + ROTATION_OFFSET.pitch,
+        yaw=yaw + ROTATION_OFFSET.yaw,
+        roll=roll + ROTATION_OFFSET.roll,
     )
 
 

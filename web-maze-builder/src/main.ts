@@ -4,7 +4,7 @@ import sampleLayoutRaw from "../maze_layout.json?raw";
 import { loadConfigFromCsv } from "./maze/csv";
 import { calculateOccupiedCellsForConfig, composeRotAbs, exitDirFromLocalRot, MazeGenerator, transformByRotAbs } from "./maze/generator";
 import { buildFamilyDisplayName, parseRailNameParts, railDisplayName } from "./maze/railLibrary";
-import { formatRollPitchYaw, normalizeRotationInput, rotAbsToUeXyz } from "./maze/rotation";
+import { formatRollPitchYaw, legacyXyzToRotAbs, normalizeRotationInput, rotAbsToUeXyz, UE_ROTATION_CONVENTION } from "./maze/rotation";
 import { DEFAULT_GENERATOR_OPTIONS, GRID_TO_WORLD_SCALE } from "./maze/constants";
 import { MazeLayout, MazeRailJson, RailConfigItem, RotAbs, Vec3Dict, Vector3 } from "./maze/types";
 import { BuildExitTarget, EditorMode, MazeViewer, RailEditAction, RailMeta } from "./viewer/MazeViewer";
@@ -729,11 +729,16 @@ function normalizeRot(rot: RotAbs | (Partial<RotAbs> & Partial<Vec3Dict>)): RotA
   return normalizeRotationInput(rot);
 }
 
+function normalizeLegacyRot(rot: RotAbs | (Partial<RotAbs> & Partial<Vec3Dict>)): RotAbs {
+  return "x" in rot || "z" in rot ? legacyXyzToRotAbs(rot) : normalizeRot(rot);
+}
+
 function normalizeLayoutRotations(layout: MazeLayout): MazeLayout {
+  const rotationNormalizer = layout.MapMeta.RotationConvention === UE_ROTATION_CONVENTION ? normalizeRot : normalizeLegacyRot;
   layout.Rail.forEach((rail) => {
-    rail.Rot_Abs = normalizeRot(rail.Rot_Abs);
+    rail.Rot_Abs = rotationNormalizer(rail.Rot_Abs);
     rail.Exit.forEach((exit) => {
-      exit.Exit_Rot_Abs = normalizeRot(exit.Exit_Rot_Abs);
+      exit.Exit_Rot_Abs = rotationNormalizer(exit.Exit_Rot_Abs);
     });
   });
   return layout;
@@ -741,6 +746,7 @@ function normalizeLayoutRotations(layout: MazeLayout): MazeLayout {
 
 function layoutForExport(layout: MazeLayout): MazeLayout {
   const exported = cloneLayout(layout);
+  exported.MapMeta.RotationConvention = UE_ROTATION_CONVENTION;
   exported.Rail.forEach((rail) => {
     rail.Rot_Abs = rotAbsToUeXyz(rail.Rot_Abs) as unknown as RotAbs;
     rail.Exit.forEach((exit) => {

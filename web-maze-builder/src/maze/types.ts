@@ -107,6 +107,7 @@ export interface MazeLayout {
     SpinCount?: number;
     MaxSpins?: number;
     Seed?: string;
+    RotationConvention?: string;
   };
   Rail: MazeRailJson[];
 }

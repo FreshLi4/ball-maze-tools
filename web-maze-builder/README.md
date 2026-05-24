@@ -122,4 +122,12 @@ Rotation values shown in Rail Detail and exported in `Rot_Abs` / `Exit_Rot_Abs` 
 x = Roll, y = Pitch, z = Yaw
 ```
 
-Maze Builder's internal generator still computes rotations as `p/y/r` (`Pitch/Yaw/Roll`). JSON drag-and-drop accepts both internal `p/y/r` files and exported UE `x/y/z` files.
+Because the viewer mirrors the logical Y axis for display, exported UE rotations use the matching handedness conversion:
+
+```text
+UE Roll = -internal Roll
+UE Pitch = internal Pitch
+UE Yaw = -internal Yaw
+```
+
+Maze Builder's internal generator still computes rotations as `p/y/r` (`Pitch/Yaw/Roll`), but imported/exported JSON and Rail Detail use the same UE-facing `x/y/z` values. Dragging in an older unmarked export is treated as legacy data so downloading it again rewrites the rotations into the current UE-equivalent convention.

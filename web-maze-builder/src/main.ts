@@ -26,6 +26,11 @@ const BUILD_GROUPS = [
 type BuildGroupId = (typeof BUILD_GROUPS)[number]["id"];
 type Language = "zh" | "en";
 
+interface DownloadPayload {
+  filename: string;
+  byteSize: number;
+}
+
 interface BuildSelection {
   familyKey: string;
   railId: string;
@@ -181,7 +186,7 @@ app.innerHTML = `
             <div class="actions">
               <button id="moveCenterBtn" title="按 grid 整数偏移当前迷宫，使布局尽量落在当前 bounds 的中心。">Move to center</button>
               <button id="fitBoundsBtn" title="把 bounds 收缩到能容纳当前迷宫的最小 grid 尺寸，并重新居中布局。">Fit size</button>
-              <button id="downloadBtn" title="下载当前迷宫 JSON。">Download JSON</button>
+              <a id="downloadBtn" class="button-link" href="#" download="maze_layout.json" title="下载当前迷宫 JSON。">Download JSON</a>
               <button id="resetCameraBtn" title="重置相机视角。">Reset View</button>
             </div>
           </div>
@@ -261,7 +266,7 @@ const logDock = document.querySelector<HTMLDivElement>(".log-dock")!;
 const logToggleBtn = document.querySelector<HTMLButtonElement>("#logToggleBtn")!;
 const langButtons = document.querySelectorAll<HTMLButtonElement>(".lang[data-lang]");
 const generateBtn = document.querySelector<HTMLButtonElement>("#generateBtn")!;
-const downloadBtn = document.querySelector<HTMLButtonElement>("#downloadBtn")!;
+const downloadBtn = document.querySelector<HTMLAnchorElement>("#downloadBtn")!;
 const resetCameraBtn = document.querySelector<HTMLButtonElement>("#resetCameraBtn")!;
 const randomSeedBtn = document.querySelector<HTMLButtonElement>("#randomSeedBtn")!;
 const moveCenterBtn = document.querySelector<HTMLButtonElement>("#moveCenterBtn")!;
@@ -302,6 +307,7 @@ let buildActiveGroup: BuildGroupId = "straight";
 let buildActiveDescriptor = "Normal";
 let buildPreviewMessage = "Select a rail to build from open exits.";
 let seedInputTimer: number | undefined;
+let downloadObjectUrl: string | null = null;
 
 interface LayoutHistorySnapshot {
   layout: MazeLayout;
@@ -1332,31 +1338,34 @@ function updateFocusButton(): void {
   focusToggleBtn.dataset.next = next;
 }
 
-async function downloadLayout(): Promise<void> {
+function prepareDownloadLink(): DownloadPayload | null {
   currentLayout.MapMeta.LevelName = currentLevelName();
   const filename = `${downloadFileStem(currentLayout.MapMeta.LevelName)}.json`;
   const text = exportLayoutText();
-  const byteSize = new Blob([text]).size;
+  const bytes = new TextEncoder().encode(text);
+  const byteSize = bytes.byteLength;
   if (byteSize <= 0) {
+    downloadBtn.href = "#";
+    downloadBtn.removeAttribute("download");
     renderLog([{ kind: "fail", message: `Export aborted: ${filename} would be empty.` }]);
+    return null;
+  }
+
+  if (downloadObjectUrl) URL.revokeObjectURL(downloadObjectUrl);
+  downloadObjectUrl = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+  downloadBtn.href = downloadObjectUrl;
+  downloadBtn.download = filename;
+  return { filename, byteSize };
+}
+
+function downloadLayout(event: MouseEvent): void {
+  const payload = prepareDownloadLink();
+  if (!payload) {
+    event.preventDefault();
     return;
   }
 
-  const blob = new Blob([text], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.style.display = "none";
-  document.body.append(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-  renderLog([{ kind: "success", message: `Downloaded ${filename} (${byteSize} bytes).` }]);
-}
-
-function exportLayoutBlob(): Blob {
-  return new Blob([exportLayoutText()], { type: "application/json" });
+  renderLog([{ kind: "success", message: `Downloading ${payload.filename} (${payload.byteSize} bytes).` }]);
 }
 
 function exportLayoutText(): string {
@@ -1398,6 +1407,9 @@ function fmt(value: number): string {
 }
 
 generateBtn.addEventListener("click", regenerateWithCurrentConfig);
+downloadBtn.addEventListener("pointerenter", prepareDownloadLink);
+downloadBtn.addEventListener("focus", prepareDownloadLink);
+downloadBtn.addEventListener("pointerdown", prepareDownloadLink);
 downloadBtn.addEventListener("click", downloadLayout);
 resetCameraBtn.addEventListener("click", () => viewer.resetCamera());
 randomSeedBtn.addEventListener("click", randomizeSeed);

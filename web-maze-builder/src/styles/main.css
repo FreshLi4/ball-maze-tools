@@ -26,11 +26,13 @@ body {
 }
 
 button,
+.button-link,
 input {
   font: inherit;
 }
 
 button,
+.button-link,
 input,
 .topbar,
 .log-dock {
@@ -293,7 +295,10 @@ input:focus {
   gap: 6px;
 }
 
-button {
+button,
+.button-link {
+  display: inline-grid;
+  place-items: center;
   min-height: 34px;
   padding: 0 13px;
   color: #2c3230;
@@ -301,13 +306,15 @@ button {
   border: 1px solid #d9d9d3;
   border-radius: 0;
   cursor: pointer;
+  text-decoration: none;
   text-transform: uppercase;
   font-size: 10px;
   font-weight: 900;
   letter-spacing: 0.8px;
 }
 
-button:hover {
+button:hover,
+.button-link:hover {
   border-color: #2c3230;
   background: #fff;
 }

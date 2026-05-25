@@ -39,7 +39,9 @@ LAYOUT_JSON_PATH = ""
 PROMPT_FOR_JSON_ON_RUN = True
 
 FOLDER_PATH = "04_Level/Rail"
-CLEAR_EXISTING_IN_FOLDER = True
+# Preserve prior imports by default. Set this to True only for an intentional
+# destructive replacement of every actor already placed in FOLDER_PATH.
+CLEAR_EXISTING_IN_FOLDER = False
 SELECT_SPAWNED_ACTORS = True
 
 GRID_TO_WORLD = 16.0

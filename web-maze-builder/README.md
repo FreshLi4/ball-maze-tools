@@ -52,14 +52,15 @@ npm run build
 Current generated seeds use:
 
 ```text
-bm01-random-difficulty-checkpoints-spins-bounds
+bm02-random-difficulty-rails-checkpoints-spins-bounds
 ```
 
 All fields are lowercase base36:
 
-- `bm01`: format version.
+- `bm02`: format version.
 - `random`: 6 chars, initializes `SeededRandom`.
 - `difficulty`: 2 chars, target total difficulty.
+- `rails`: 2 chars, target rail count used to guide difficulty per step.
 - `checkpoints`: 2 chars, target checkpoint count.
 - `spins`: 2 chars, max non-zero self-spins.
 - `bounds`: 6 chars, packed `xx yy zz` bounds.
@@ -67,7 +68,7 @@ All fields are lowercase base36:
 Example:
 
 ```text
-bm01-0d2wnk-0o-03-00-0d0905
+bm02-0d2wnk-0o-10-03-00-0d0d0d
 ```
 
 This means:
@@ -75,9 +76,10 @@ This means:
 ```text
 random = parseInt("0d2wnk", 36)
 difficulty = parseInt("0o", 36)
+target rails = parseInt("10", 36)
 checkpoints = parseInt("03", 36)
 spins = parseInt("00", 36)
-bounds = 13 / 9 / 5
+bounds = 13 / 13 / 13
 ```
 
 `random` is not the maze layout itself. It initializes `SeededRandom`:
@@ -95,10 +97,14 @@ To reproduce a maze exactly, seed, `rail_config.csv`, generator code, options, a
 The generated maze is best understood as:
 
 ```text
-maze = generate(seed, rail_config_csv, target_difficulty, checkpoints, max_spins, bounds, generator_code)
+maze = generate(seed, rail_config_csv, target_difficulty, target_rails, checkpoints, max_spins, bounds, generator_code)
 ```
 
 Seed controls random choices such as start rail, start position, open connector selection, candidate rail order, and retry order. CSV and code still define rail sizes, exits, difficulty, collision, bounds, and rotations.
+
+`Target rails` produces an average target difficulty per rail. While growing a maze, the generator prefers candidates that pull accumulated difficulty back toward that expected curve. This changes attempt order only; fitting fallback candidates remain available.
+
+For `N` checkpoints, the maze has `N + 1` difficulty segments. The checkpoint threshold is therefore `target difficulty / (N + 1)`. Once a segment crosses that threshold, generation backs up and keeps retrying a fork-plus-checkpoint placement earlier in the segment rather than placing ordinary rails past the threshold.
 
 ## Rail Config CSV
 
@@ -114,7 +120,7 @@ The default `rail_config.csv` uses the normalized rail config format:
 
 ## Output
 
-Exported JSON records the generated result: rail IDs, positions, rotations, occupied cells, exits, connections, and `MapMeta` stats such as total difficulty, checkpoint segment difficulties, and spin usage.
+Exported JSON records the generated result: rail IDs, positions, rotations, occupied cells, exits, connections, and `MapMeta` stats such as total difficulty, target rail count, average target difficulty, checkpoint segment difficulties, and spin usage.
 
 Rotation values shown in Rail Detail and exported in `Rot_Abs` / `Exit_Rot_Abs` use Unreal transform order:
 

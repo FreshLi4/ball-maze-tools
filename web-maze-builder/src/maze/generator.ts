@@ -199,7 +199,10 @@ export class MazeGenerator {
   }
 
   generate(): MazeLayout {
-    this.log("info", `Start Generating... Target Diff: ${this.options.targetDifficulty}`);
+    this.log(
+      "info",
+      `Start Generating... Target Diff: ${this.options.targetDifficulty}, Target Rails: ${this.targetRailCount()}, Avg Diff: ${this.targetAverageDifficulty().toFixed(2)}`,
+    );
     const startCandidates = [...this.configMap.values()].filter((item) => item.isStart);
     if (startCandidates.length === 0) throw new Error("No Start Rail defined.");
 
@@ -220,35 +223,39 @@ export class MazeGenerator {
     this.log("success", `Start: ${start.rowName}, ${this.formatRailPose(startResult)}`);
 
     const checkpointTarget = Math.max(0, Math.floor(this.options.targetCheckpoints));
-    const segmentTargetDiff = checkpointTarget > 0 ? this.options.targetDifficulty / checkpointTarget : Infinity;
+    const segmentTargetDiff = checkpointTarget > 0 ? this.options.targetDifficulty / (checkpointTarget + 1) : Infinity;
     let forceCheckpoint = false;
+    let forcedCheckpointConnector: OpenConnector | null = null;
     if (checkpointTarget > 0) this.log("info", `Checkpoint target: ${checkpointTarget}, segment diff threshold: ${segmentTargetDiff.toFixed(2)}`);
 
     while (true) {
       const allCheckpointsPlaced = this.placedCheckpointsCount >= checkpointTarget;
       const mustEnd = this.currentTotalDifficulty >= this.options.targetDifficulty && allCheckpointsPlaced;
       const hasSegmentProgress = this.segmentDiffAcc > 0;
-      if (forceCheckpoint && !hasSegmentProgress) forceCheckpoint = false;
       const triggerCheckpoint =
         !mustEnd &&
-        hasSegmentProgress &&
         (forceCheckpoint ||
-          (this.placedCheckpointsCount < checkpointTarget && this.segmentDiffAcc > segmentTargetDiff));
+          (hasSegmentProgress && this.placedCheckpointsCount < checkpointTarget && this.segmentDiffAcc > segmentTargetDiff));
 
       if (triggerCheckpoint && !forceCheckpoint) {
-        if (!this.backtrackLastRail()) break;
+        forcedCheckpointConnector = this.backtrackForCheckpointConnector();
+        if (!forcedCheckpointConnector) break;
         forceCheckpoint = true;
         this.log("info", `Checkpoint threshold reached. Backtracked 1 rail before placing checkpoint fork.`);
         continue;
       }
 
-      if (this.openList.length === 0) {
+      if (!forceCheckpoint && this.openList.length === 0) {
         if (!this.backtrackLastRail()) break;
         continue;
       }
 
-      const connector = this.openList.splice(this.random.int(0, this.openList.length - 1), 1)[0];
-      let candidates = this.getCandidates(mustEnd, triggerCheckpoint).filter(
+      const connector = forceCheckpoint
+        ? forcedCheckpointConnector
+        : this.openList.splice(this.random.int(0, this.openList.length - 1), 1)[0];
+      forcedCheckpointConnector = null;
+      if (!connector) break;
+      const candidates = this.getCandidates(mustEnd, triggerCheckpoint).filter(
         (candidate) => !connector.forbiddenCandidates.has(candidate),
       );
       const spinOptions = this.availableSpinOptions(connector.spinDiffs);
@@ -259,65 +266,60 @@ export class MazeGenerator {
       let placedId = "";
       const failReasons = new Map<string, number>();
 
-      while (candidates.length > 0 && !success) {
-        const candidateIdx = this.random.int(0, candidates.length - 1);
-        const candidate = candidates.splice(candidateIdx, 1)[0];
+      for (const { railId: candidate, spinRot, ratio } of this.difficultyGuidedAttempts(candidates, spinOptions, connector.accumulatedDiff)) {
+        attempts += 1;
+        const [targetRot, targetRotAbs, targetRoll] = this.calculateRailTransform(connector, spinRot);
+        const result = this.placeRailV2(
+          candidate,
+          connector.targetPos,
+          targetRot,
+          targetRotAbs,
+          connector.accumulatedDiff,
+          ratio,
+          connector.parentId,
+          targetRoll,
+        );
 
-        for (const { spinRot, ratio } of spinOptions) {
-          attempts += 1;
-          const [targetRot, targetRotAbs, targetRoll] = this.calculateRailTransform(connector, spinRot);
-          const result = this.placeRailV2(
-            candidate,
-            connector.targetPos,
-            targetRot,
-            targetRotAbs,
-            connector.accumulatedDiff,
-            ratio,
-            connector.parentId,
-            targetRoll,
-          );
-
-          if (typeof result !== "string") {
-            const parent = this.placedRails.find((rail) => rail.railIndex === connector.parentId);
-            if (parent) {
-              parent.nextIndices.push(result.railIndex);
-              parent.exitStatus[connector.parentExitIdx].IsConnected = true;
-              parent.exitStatus[connector.parentExitIdx].TargetID = result.railIndex;
-            }
-
-            result.forbiddenSiblings = new Set(connector.forbiddenCandidates);
-            placed = result;
-            placedId = candidate;
-            if (triggerCheckpoint) {
-              const checkpoint = this.placeCheckpointOnFork(result, connector.accumulatedDiff + result.diffAct);
-              if (checkpoint) {
-                this.placedCheckpointsCount += 1;
-                this.segmentDiffAcc += result.diffAct + checkpoint.diffAct;
-                this.segmentDiffs.push(Number(this.segmentDiffAcc.toFixed(8)));
-                this.segmentDiffAcc = 0;
-                forceCheckpoint = false;
-                success = true;
-                this.log(
-                  "success",
-                  `Checkpoint ${this.placedCheckpointsCount}/${checkpointTarget}: ${checkpoint.railId}, ${this.formatRailPose(checkpoint)} after fork ${result.railId}, fork ${this.formatRailPose(result)}`,
-                );
-                break;
-              }
-
-              this.rollbackPlacedRail(result);
-              placed = null;
-              placedId = "";
-              failReasons.set("CheckpointPlacementFailed", (failReasons.get("CheckpointPlacementFailed") ?? 0) + 1);
-              continue;
-            }
-
-            success = true;
-            this.segmentDiffAcc += result.diffAct;
-            break;
+        if (typeof result !== "string") {
+          const parent = this.placedRails.find((rail) => rail.railIndex === connector.parentId);
+          if (parent) {
+            parent.nextIndices.push(result.railIndex);
+            parent.exitStatus[connector.parentExitIdx].IsConnected = true;
+            parent.exitStatus[connector.parentExitIdx].TargetID = result.railIndex;
           }
 
-          failReasons.set(result, (failReasons.get(result) ?? 0) + 1);
+          result.forbiddenSiblings = new Set(connector.forbiddenCandidates);
+          placed = result;
+          placedId = candidate;
+          if (triggerCheckpoint) {
+            const checkpoint = this.placeCheckpointOnFork(result, connector.accumulatedDiff + result.diffAct);
+            if (checkpoint) {
+              this.placedCheckpointsCount += 1;
+              this.segmentDiffAcc += result.diffAct + checkpoint.diffAct;
+              this.segmentDiffs.push(Number(this.segmentDiffAcc.toFixed(8)));
+              this.segmentDiffAcc = 0;
+              forceCheckpoint = false;
+              success = true;
+              this.log(
+                "success",
+                `Checkpoint ${this.placedCheckpointsCount}/${checkpointTarget}: ${checkpoint.railId}, ${this.formatRailPose(checkpoint)} after fork ${result.railId}, fork ${this.formatRailPose(result)}`,
+              );
+              break;
+            }
+
+            this.rollbackPlacedRail(result);
+            placed = null;
+            placedId = "";
+            failReasons.set("CheckpointPlacementFailed", (failReasons.get("CheckpointPlacementFailed") ?? 0) + 1);
+            continue;
+          }
+
+          success = true;
+          this.segmentDiffAcc += result.diffAct;
+          break;
         }
+
+        failReasons.set(result, (failReasons.get(result) ?? 0) + 1);
       }
 
       if (!success) {
@@ -326,8 +328,12 @@ export class MazeGenerator {
           `Step failed at pos=${this.formatVec(connector.targetPos)}, parent=${connector.parentId}, exit=${connector.parentExitIdx}, baseDir=${forwardDirFromRotAbs(this.exitRotAbs(connector))}, baseRot=${this.formatRot(this.exitRotAbs(connector))}: ${JSON.stringify(Object.fromEntries(failReasons))}`,
         );
         if (forceCheckpoint) {
-          forceCheckpoint = false;
-          this.log("warn", "Checkpoint fork placement failed. Resuming normal growth until the segment threshold is reached again.");
+          forcedCheckpointConnector = this.backtrackForCheckpointConnector();
+          if (!forcedCheckpointConnector) {
+            this.log("fail", "Checkpoint fork placement failed and no earlier placement remains for retry.");
+            break;
+          }
+          this.log("warn", "Checkpoint fork placement failed. Backtracked again to retry checkpoint placement earlier in the segment.");
         }
       } else if (placed) {
         this.log(
@@ -395,6 +401,8 @@ export class MazeGenerator {
         LevelName: "TypeScript_Generated_Web",
         RailCount: rails.length,
         MazeDiff: rails.reduce((sum, rail) => sum + rail.Diff_Act, 0),
+        TargetRailCount: this.targetRailCount(),
+        TargetAverageDiff: Number(this.targetAverageDifficulty().toFixed(8)),
         CheckpointCount: rails.filter((rail) => rail.Rail_ID.toLowerCase().includes("checkpoint")).length,
         SegmentDiffs: segmentDiffs,
         SpinCount: this.usedSpinCount,
@@ -567,6 +575,11 @@ export class MazeGenerator {
     return true;
   }
 
+  private backtrackForCheckpointConnector(): OpenConnector | null {
+    if (!this.backtrackLastRail()) return null;
+    return this.openList.pop() ?? null;
+  }
+
   private rollbackPlacedRail(rail: RailInstance): void {
     const railIndex = this.placedRails.findIndex((item) => item.railIndex === rail.railIndex);
     if (railIndex !== -1) this.placedRails.splice(railIndex, 1);
@@ -609,6 +622,49 @@ export class MazeGenerator {
 
   private maxSpins(): number {
     return Math.max(0, Math.floor(this.options.maxSpins));
+  }
+
+  private targetRailCount(): number {
+    return Math.max(1, Math.floor(this.options.targetRailCount));
+  }
+
+  private targetAverageDifficulty(): number {
+    return this.options.targetDifficulty / this.targetRailCount();
+  }
+
+  private difficultyGuidedAttempts(
+    candidates: string[],
+    spinOptions: { spinRot: number; ratio: number }[],
+    accumulatedDiff: number,
+  ): { railId: string; spinRot: number; ratio: number }[] {
+    const average = this.targetAverageDifficulty();
+    const expectedCurrent = this.placedRails.length * average;
+    const expectedNext = (this.placedRails.length + 1) * average;
+    const behindTarget = this.currentTotalDifficulty < expectedCurrent;
+    const aheadTarget = this.currentTotalDifficulty > expectedCurrent;
+
+    return candidates
+      .flatMap((railId) => spinOptions.map(({ spinRot, ratio }) => {
+        const predictedDiff = (1 + accumulatedDiff * 0.1) * this.requireConfig(railId).diffBase * ratio;
+        const onPreferredSide =
+          (!behindTarget && !aheadTarget) ||
+          (behindTarget && predictedDiff >= average) ||
+          (aheadTarget && predictedDiff <= average);
+        return {
+          railId,
+          spinRot,
+          ratio,
+          onPreferredSide,
+          distance: Math.abs(this.currentTotalDifficulty + predictedDiff - expectedNext),
+          randomOrder: this.random.next(),
+        };
+      }))
+      .sort((a, b) =>
+        Number(b.onPreferredSide) - Number(a.onPreferredSide) ||
+        a.distance - b.distance ||
+        a.randomOrder - b.randomOrder,
+      )
+      .map(({ railId, spinRot, ratio }) => ({ railId, spinRot, ratio }));
   }
 
   private getCandidates(mustEnd: boolean, triggerCheckpoint: boolean): string[] {

@@ -13,7 +13,7 @@ import "./styles/main.css";
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("Missing #app");
 
-const SEED_VERSION = "bm01";
+const SEED_VERSION = "bm02";
 const RANDOM_SEED_MAX = 36 ** 6;
 const BUILD_GROUPS = [
   { id: "straight", label: "Straight" },
@@ -53,6 +53,7 @@ function createRandomSeed(): number {
 interface GeneratorSeedState {
   random: number;
   targetDifficulty: number;
+  targetRailCount: number;
   targetCheckpoints: number;
   maxSpins: number;
   bounds: Vec3Dict;
@@ -71,6 +72,7 @@ function createRandomSeedState(): GeneratorSeedState {
   return {
     random: createRandomSeed(),
     targetDifficulty: Math.floor(Math.random() * 23) + 8,
+    targetRailCount: Math.floor(Math.random() * 17) + 8,
     targetCheckpoints: Math.floor(Math.random() * 4),
     maxSpins: Math.floor(Math.random() * 5),
     bounds: cubicBounds(boundSize),
@@ -81,6 +83,7 @@ function createInitialSeedState(): GeneratorSeedState {
   return {
     random: createRandomSeed(),
     targetDifficulty: DEFAULT_GENERATOR_OPTIONS.targetDifficulty,
+    targetRailCount: DEFAULT_GENERATOR_OPTIONS.targetRailCount,
     targetCheckpoints: DEFAULT_GENERATOR_OPTIONS.targetCheckpoints,
     maxSpins: DEFAULT_GENERATOR_OPTIONS.maxSpins,
     bounds: DEFAULT_GENERATOR_OPTIONS.bounds.toDict(),
@@ -93,6 +96,7 @@ function encodeSeedState(state: GeneratorSeedState): string {
     SEED_VERSION,
     encode(state.random, 6),
     encode(Math.max(1, state.targetDifficulty), 2),
+    encode(Math.max(1, state.targetRailCount), 2),
     encode(state.targetCheckpoints, 2),
     encode(state.maxSpins, 2),
     [normalizeBoundSize(state.bounds.x), normalizeBoundSize(state.bounds.y), normalizeBoundSize(state.bounds.z)]
@@ -104,27 +108,31 @@ function encodeSeedState(state: GeneratorSeedState): string {
 function parseSeedState(seed: string): GeneratorSeedState | null {
   const raw = seed.trim();
   const parts = raw.split("-");
-  if (parts.length !== 6) return null;
 
   const read = (value: string) => Number.parseInt(value, 36);
   const isModern = parts[0] === SEED_VERSION;
+  const isBm01 = parts[0] === "bm01";
   const isLegacy = parts[0] === "BM1";
-  if (!isModern && !isLegacy) return null;
+  if ((!isModern || parts.length !== 7) && ((!isBm01 && !isLegacy) || parts.length !== 6)) return null;
 
   const bounds = isModern
-    ? [parts[5].slice(0, 2), parts[5].slice(2, 4), parts[5].slice(4, 6)].map(read)
-    : parts[5].split(".").map(read);
+    ? [parts[6].slice(0, 2), parts[6].slice(2, 4), parts[6].slice(4, 6)].map(read)
+    : isBm01
+      ? [parts[5].slice(0, 2), parts[5].slice(2, 4), parts[5].slice(4, 6)].map(read)
+      : parts[5].split(".").map(read);
   const random = read(parts[1]);
   const targetDifficulty = read(parts[2]);
-  const targetCheckpoints = read(parts[3]);
-  const maxSpins = read(parts[4]);
-  if (![random, targetDifficulty, targetCheckpoints, maxSpins, ...bounds].every(Number.isFinite)) return null;
+  const targetRailCount = isModern ? read(parts[3]) : DEFAULT_GENERATOR_OPTIONS.targetRailCount;
+  const targetCheckpoints = read(parts[isModern ? 4 : 3]);
+  const maxSpins = read(parts[isModern ? 5 : 4]);
+  if (![random, targetDifficulty, targetRailCount, targetCheckpoints, maxSpins, ...bounds].every(Number.isFinite)) return null;
   if (bounds.length !== 3) return null;
-  if (isModern && !/^[a-z0-9]{4}-[a-z0-9]{6}-[a-z0-9]{2}-[a-z0-9]{2}-[a-z0-9]{2}-[a-z0-9]{6}$/.test(raw)) return null;
+  if (isModern && !/^[a-z0-9]{4}-[a-z0-9]{6}-[a-z0-9]{2}-[a-z0-9]{2}-[a-z0-9]{2}-[a-z0-9]{2}-[a-z0-9]{6}$/.test(raw)) return null;
 
   return {
     random,
     targetDifficulty: Math.max(1, Math.floor(targetDifficulty)),
+    targetRailCount: Math.max(1, Math.floor(targetRailCount)),
     targetCheckpoints: Math.max(0, Math.floor(targetCheckpoints)),
     maxSpins: Math.max(0, Math.floor(maxSpins)),
     bounds: cubicBounds(Math.max(...bounds)),
@@ -161,7 +169,7 @@ app.innerHTML = `
               <input id="levelNameInput" type="text" value="TypeScript_Generated_Web" />
             </label>
             <label class="field">
-              <span class="help-label" data-help="完整生成种子，格式为 bm01-random-difficulty-checkpoints-spins-bounds。输入有效 seed 会自动反写配置并生成迷宫。">Seed</span>
+              <span class="help-label" data-help="完整生成种子，格式为 bm02-random-difficulty-rails-checkpoints-spins-bounds。输入有效 seed 会自动反写配置并生成迷宫。">Seed</span>
               <div class="seed-row">
                 <input id="seedInput" type="text" value="${encodeSeedState(createInitialSeedState())}" />
                 <button id="randomSeedBtn" class="icon-button" title="随机生成一套新的 seed 和配置。">↻</button>
@@ -170,6 +178,10 @@ app.innerHTML = `
             <label class="field">
               <span class="help-label" data-help="目标总难度。生成器达到该难度后会尝试收尾并放置终点。">Target difficulty</span>
               <input id="difficultyInput" type="number" min="1" step="1" value="${DEFAULT_GENERATOR_OPTIONS.targetDifficulty}" />
+            </label>
+            <label class="field">
+              <span class="help-label" data-help="目标轨道数量。生成器以目标总难度除以该数量得到每节轨道的平均目标难度。">Target rails</span>
+              <input id="railCountInput" type="number" min="1" step="1" value="${DEFAULT_GENERATOR_OPTIONS.targetRailCount}" />
             </label>
             <label class="field">
               <span class="help-label" data-help="Checkpoint 数量。为 0 时不放置 checkpoint；大于 0 时每段超过目标难度 / checkpoint 数量后触发一次分叉 checkpoint。">Checkpoints</span>
@@ -288,6 +300,7 @@ const partStrip = document.querySelector<HTMLDivElement>("#partStrip")!;
 const levelNameInput = document.querySelector<HTMLInputElement>("#levelNameInput")!;
 const seedInput = document.querySelector<HTMLInputElement>("#seedInput")!;
 const difficultyInput = document.querySelector<HTMLInputElement>("#difficultyInput")!;
+const railCountInput = document.querySelector<HTMLInputElement>("#railCountInput")!;
 const checkpointInput = document.querySelector<HTMLInputElement>("#checkpointInput")!;
 const maxSpinsInput = document.querySelector<HTMLInputElement>("#maxSpinsInput")!;
 const boundSize = document.querySelector<HTMLInputElement>("#boundSize")!;
@@ -536,6 +549,7 @@ function readGeneratorStateFromControls(random = Number(createRandomSeed())): Ge
   return {
     random,
     targetDifficulty: Math.max(1, Math.floor(Number(difficultyInput.value) || DEFAULT_GENERATOR_OPTIONS.targetDifficulty)),
+    targetRailCount: Math.max(1, Math.floor(Number(railCountInput.value) || DEFAULT_GENERATOR_OPTIONS.targetRailCount)),
     targetCheckpoints: Math.max(0, Math.floor(Number(checkpointInput.value) || DEFAULT_GENERATOR_OPTIONS.targetCheckpoints)),
     maxSpins: Math.max(0, Math.floor(Number(maxSpinsInput.value) || DEFAULT_GENERATOR_OPTIONS.maxSpins)),
     bounds,
@@ -544,6 +558,7 @@ function readGeneratorStateFromControls(random = Number(createRandomSeed())): Ge
 
 function applySeedState(state: GeneratorSeedState): void {
   difficultyInput.value = String(state.targetDifficulty);
+  railCountInput.value = String(state.targetRailCount);
   checkpointInput.value = String(state.targetCheckpoints);
   maxSpinsInput.value = String(state.maxSpins);
   boundSize.value = String(Math.max(state.bounds.x, state.bounds.y, state.bounds.z));
@@ -556,6 +571,7 @@ function generateLayout(state: GeneratorSeedState): void {
     const generator = new MazeGenerator(config, {
       seed: state.random,
       targetDifficulty: state.targetDifficulty,
+      targetRailCount: state.targetRailCount,
       targetCheckpoints: state.targetCheckpoints,
       maxSpins: state.maxSpins,
       bounds: new Vector3(state.bounds.x, state.bounds.y, state.bounds.z),
@@ -576,7 +592,7 @@ function generateLayout(state: GeneratorSeedState): void {
 function generateFromSeedInput(): void {
   const state = parseSeedState(seedInput.value);
   if (!state) {
-    logContent.innerHTML = `<div class="log-line fail">${markLatin("Invalid seed. Expected format: bm01-000000-00-00-00-000000")}</div>`;
+    logContent.innerHTML = `<div class="log-line fail">${markLatin("Invalid seed. Expected format: bm02-000000-00-00-00-00-000000")}</div>`;
     return;
   }
   seedInput.value = encodeSeedState(state);
@@ -600,6 +616,8 @@ function setLayout(layout: MazeLayout, keepSelectedId: number | null = null, ani
   statsContent.innerHTML = `
     <div><span>${markLatin("Rails")}</span><strong>${markLatin(String(layout.MapMeta.RailCount))}</strong></div>
     <div><span>${markLatin("Difficulty")}</span><strong>${markLatin(layout.MapMeta.MazeDiff.toFixed(2))}</strong></div>
+    <div><span>${markLatin("Target Rails")}</span><strong>${markLatin(String(layout.MapMeta.TargetRailCount ?? "-"))}</strong></div>
+    <div><span>${markLatin("Avg Target Diff")}</span><strong>${markLatin(layout.MapMeta.TargetAverageDiff?.toFixed(2) ?? "-")}</strong></div>
     <div><span>${markLatin("Start")}</span><strong>${markLatin(String(layout.Rail.filter((rail) => rail.Rail_ID.includes("Start")).length))}</strong></div>
     <div><span>${markLatin("End")}</span><strong>${markLatin(String(layout.Rail.filter((rail) => rail.Rail_ID.includes("End")).length))}</strong></div>
     <div><span>${markLatin("Checkpoints")}</span><strong>${markLatin(String(layout.Rail.filter((rail) => rail.Rail_ID.toLowerCase().includes("checkpoint")).length))}</strong></div>

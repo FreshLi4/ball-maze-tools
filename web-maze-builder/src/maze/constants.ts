@@ -4,6 +4,7 @@ export const GRID_TO_WORLD_SCALE = 16;
 
 export const DEFAULT_GENERATOR_OPTIONS = {
   targetDifficulty: 15,
+  targetRailCount: 16,
   targetCheckpoints: 0,
   maxSpins: 0,
   boundaryMode: 0 as const,

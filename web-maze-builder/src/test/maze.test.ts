@@ -351,8 +351,10 @@ describe("TypeScript maze port", () => {
 
   it("generates a connected layout in the exported JSON shape", () => {
     const config = loadConfigFromCsv(railConfigCsv);
-    const layout = new MazeGenerator(config, { seed: 20260425, targetDifficulty: 15 }).generate();
+    const layout = new MazeGenerator(config, { seed: 20260425, targetDifficulty: 15, targetRailCount: 10 }).generate();
     expect(layout.MapMeta.RailCount).toBe(layout.Rail.length);
+    expect(layout.MapMeta.TargetRailCount).toBe(10);
+    expect(layout.MapMeta.TargetAverageDiff).toBe(1.5);
     expect(layout.Rail.filter((rail) => rail.Rail_ID.includes("Start"))).toHaveLength(1);
     expect(layout.Rail.filter((rail) => rail.Rail_ID.includes("End"))).toHaveLength(1);
     expect(layout.MapMeta.MazeDiff).toBeGreaterThanOrEqual(15);
@@ -361,6 +363,36 @@ describe("TypeScript maze port", () => {
       expect(Math.abs(rail.Pos_Abs.y % 16)).toBe(0);
       expect(Math.abs(rail.Pos_Abs.z % 16)).toBe(0);
     }
+  });
+
+  it("orders all candidate attempts toward the target average difficulty without filtering fallbacks", () => {
+    const config = loadConfigFromCsv([
+      "RowName,Diff_Base,Size,Exit_Array",
+      'BP_Straight_F_X1_Y1_Z1_Rail,1,"(X=1,Y=1,Z=1)","((Pos=(X=16,Y=0,Z=0),BaseRot=(P=0,Y=0,R=0),SpinDiff=(X=1,Y=0,Z=0,W=0)))"',
+      'BP_Curve_R90_X1_Y1_Z1_Rail,4,"(X=1,Y=1,Z=1)","((Pos=(X=0,Y=16,Z=0),BaseRot=(P=0,Y=90,R=0),SpinDiff=(X=1,Y=0,Z=0,W=0)))"',
+    ].join("\n"));
+    const generator = new MazeGenerator(config, { seed: 1, targetDifficulty: 20, targetRailCount: 10 });
+    generator.placedRails.length = 3;
+
+    generator.currentTotalDifficulty = 2;
+    const behind = generator["difficultyGuidedAttempts"](
+      ["BP_Straight_F_X1_Y1_Z1_Rail", "BP_Curve_R90_X1_Y1_Z1_Rail"],
+      [{ spinRot: 0, ratio: 1 }],
+      0,
+    );
+    expect(behind[0].railId).toBe("BP_Curve_R90_X1_Y1_Z1_Rail");
+
+    generator.currentTotalDifficulty = 10;
+    const ahead = generator["difficultyGuidedAttempts"](
+      ["BP_Straight_F_X1_Y1_Z1_Rail", "BP_Curve_R90_X1_Y1_Z1_Rail"],
+      [{ spinRot: 0, ratio: 1 }],
+      0,
+    );
+    expect(ahead[0].railId).toBe("BP_Straight_F_X1_Y1_Z1_Rail");
+    expect(ahead.map((attempt) => attempt.railId).sort()).toEqual([
+      "BP_Curve_R90_X1_Y1_Z1_Rail",
+      "BP_Straight_F_X1_Y1_Z1_Rail",
+    ]);
   });
 
   it("disables self-spin by default", () => {
@@ -434,6 +466,7 @@ describe("TypeScript maze port", () => {
     expect(checkpoints).toHaveLength(2);
     expect(layout.MapMeta.CheckpointCount).toBe(2);
     expect(layout.MapMeta.SegmentDiffs).toHaveLength(3);
+    expect(layout.MapMeta.SegmentDiffs?.slice(0, -1).every((diff) => diff > 0)).toBe(true);
 
     for (const checkpoint of checkpoints) {
       const parent = layout.Rail.find((rail) => rail.Rail_Index === checkpoint.Prev_Index);
@@ -443,19 +476,45 @@ describe("TypeScript maze port", () => {
     }
   });
 
-  it("does not force a checkpoint after backtracking removes all segment progress", () => {
+  it("uses checkpoint count plus one as the number of target segments", () => {
     const config = loadConfigFromCsv(railConfigCsv);
-    const layout = new MazeGenerator(config, {
-      seed: 654324621,
-      targetDifficulty: 25,
-      targetCheckpoints: 3,
-      maxSpins: 3,
-      bounds: new Vector3(13, 7, 3),
-    }).generate();
+    const generator = new MazeGenerator(config, {
+      seed: 20260425,
+      targetDifficulty: 15,
+      targetCheckpoints: 2,
+      maxSpins: 4,
+      bounds: new Vector3(13, 13, 5),
+    });
+    generator.generate();
+    expect(generator.logs.some((entry) => entry.message.includes("segment diff threshold: 5.00"))).toBe(true);
+  });
 
-    expect(layout.MapMeta.CheckpointCount).toBeGreaterThan(0);
-    expect(layout.MapMeta.SegmentDiffs).toHaveLength((layout.MapMeta.CheckpointCount ?? 0) + 1);
-    expect(layout.MapMeta.SegmentDiffs?.slice(0, -1).every((diff) => diff > 0)).toBe(true);
+  it("backtracks and retries instead of resuming normal growth when checkpoint fork placement fails", () => {
+    const config = loadConfigFromCsv(railConfigCsv);
+    const generator = new MazeGenerator(config, {
+      seed: 20260425,
+      targetDifficulty: 15,
+      targetCheckpoints: 1,
+      maxSpins: 4,
+      bounds: new Vector3(13, 13, 7),
+    });
+    const placeCheckpoint = generator["placeCheckpointOnFork"].bind(generator);
+    let rejectedForks = 0;
+    let rejectedPosition = "";
+    generator["placeCheckpointOnFork"] = (fork, accumulatedDiff) => {
+      const position = JSON.stringify(fork.posRev.toDict());
+      if (rejectedPosition === "") rejectedPosition = position;
+      if (position === rejectedPosition) {
+        rejectedForks += 1;
+        return null;
+      }
+      return placeCheckpoint(fork, accumulatedDiff);
+    };
+
+    const layout = generator.generate();
+    expect(rejectedForks).toBeGreaterThan(0);
+    expect(generator.logs.some((entry) => entry.message.includes("Backtracked again to retry checkpoint placement"))).toBe(true);
+    expect(layout.MapMeta.CheckpointCount).toBe(1);
   });
 
   it("keeps child enter direction aligned with the parent exit after pitched fork exits", () => {

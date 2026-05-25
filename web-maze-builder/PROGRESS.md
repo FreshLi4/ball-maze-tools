@@ -23,8 +23,9 @@ Current work focuses on the TypeScript/Vite generator and viewer in `src/`. The 
 ### Checkpoint Logic
 
 - Checkpoint count is configurable with minimum 0.
-- When checkpoint count is greater than 0, generator tracks segment difficulty.
-- On checkpoint threshold, generator backtracks one rail and attempts to place a fork rail with at least two exits.
+- When checkpoint count is greater than 0, generator tracks segment difficulty against `target difficulty / (checkpoint count + 1)`.
+- On checkpoint threshold, generator backtracks one rail and attempts to place a fork rail with at least two exits at that connector.
+- If fork/checkpoint placement fails there, the generator remains in forced checkpoint mode and backtracks again to retry instead of continuing normal growth.
 - One fork exit places checkpoint, another can continue maze generation.
 - Stats and `MapMeta` include segment difficulties.
 
@@ -40,12 +41,19 @@ Current work focuses on the TypeScript/Vite generator and viewer in `src/`. The 
 ### Seed Logic
 
 - Seed is now a complete generation configuration, not only random entropy.
-- Current format is `bm01-random-difficulty-checkpoints-spins-bounds`.
+- Current format is `bm02-random-difficulty-rails-checkpoints-spins-bounds`.
 - All seed fields are lowercase base36.
 - Inputting a valid seed updates Generator controls and regenerates.
 - Random seed button generates a full random seed/configuration.
 - Generate button keeps current configuration but changes the random part.
-- Legacy `BM1-...` parsing is still accepted, but new seeds use `bm01-...`.
+- Legacy `BM1-...` and `bm01-...` parsing is still accepted, but new seeds use `bm02-...`.
+
+### Difficulty Guidance
+
+- Added a target rail count generator option and encoded it in new seeds.
+- Generator reports target rail count and average target difficulty in `MapMeta` and Stats.
+- Candidate rail/spin attempts are ordered toward the expected cumulative difficulty curve.
+- Guidance is preference-only; every otherwise eligible candidate remains available as a fallback.
 
 ### Direction and Footprint Work
 

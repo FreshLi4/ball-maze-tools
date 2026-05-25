@@ -40,12 +40,19 @@ Current work focuses on the TypeScript/Vite generator and viewer in `src/`. The 
 ### Seed Logic
 
 - Seed is now a complete generation configuration, not only random entropy.
-- Current format is `bm01-random-difficulty-checkpoints-spins-bounds`.
+- Current format is `bm02-random-difficulty-rails-checkpoints-spins-bounds`.
 - All seed fields are lowercase base36.
 - Inputting a valid seed updates Generator controls and regenerates.
 - Random seed button generates a full random seed/configuration.
 - Generate button keeps current configuration but changes the random part.
-- Legacy `BM1-...` parsing is still accepted, but new seeds use `bm01-...`.
+- Legacy `BM1-...` and `bm01-...` parsing is still accepted, but new seeds use `bm02-...`.
+
+### Difficulty Guidance
+
+- Added a target rail count generator option and encoded it in new seeds.
+- Generator reports target rail count and average target difficulty in `MapMeta` and Stats.
+- Candidate rail/spin attempts are ordered toward the expected cumulative difficulty curve.
+- Guidance is preference-only; every otherwise eligible candidate remains available as a fallback.
 
 ### Direction and Footprint Work
 

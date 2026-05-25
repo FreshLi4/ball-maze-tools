@@ -131,14 +131,15 @@ When placing a child rail:
 Current generated seed format:
 
 ```text
-bm01-random-difficulty-checkpoints-spins-bounds
+bm02-random-difficulty-rails-checkpoints-spins-bounds
 ```
 
 Field widths:
 
-- `bm01`: version, 4 chars.
+- `bm02`: version, 4 chars.
 - `random`: 6 chars.
 - `difficulty`: 2 chars.
+- `rails`: 2 chars, target rail count for difficulty guidance.
 - `checkpoints`: 2 chars.
 - `spins`: 2 chars.
 - `bounds`: 6 chars, `xx yy zz` packed together.
@@ -146,6 +147,13 @@ Field widths:
 `random` initializes `SeededRandom`; it is not the layout itself.
 
 To reproduce a maze, seed, config, generator code, and random call order must match.
+
+## Difficulty Guidance Rules
+
+- `targetRailCount` determines the per-step average target difficulty: `targetDifficulty / targetRailCount`.
+- Before a normal placement attempt, compare current total difficulty against `placedRailCount * averageTargetDifficulty`.
+- When below the target curve, try candidate rail/spin combinations above the average first; when above it, try combinations below the average first.
+- This is ordering only. It must never remove candidate placements or cause generation to fail when a fallback candidate would fit.
 
 ## Known Asset Overrides
 

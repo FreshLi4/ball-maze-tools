@@ -102,6 +102,8 @@ export interface MazeLayout {
     LevelName: string;
     RailCount: number;
     MazeDiff: number;
+    TargetRailCount?: number;
+    TargetAverageDiff?: number;
     CheckpointCount?: number;
     SegmentDiffs?: number[];
     SpinCount?: number;
@@ -114,6 +116,7 @@ export interface MazeLayout {
 
 export interface GeneratorOptions {
   targetDifficulty: number;
+  targetRailCount: number;
   targetCheckpoints: number;
   maxSpins: number;
   boundaryMode: 0 | 1;

@@ -86,15 +86,15 @@ Exported JSON for UE must use Transform rotation order:
 x = Roll, y = Pitch, z = Yaw
 ```
 
-Because the viewer mirrors logical Y for display, export/display must also convert handedness:
+Do not negate yaw merely because the viewer maps logical Y into screen space: generator yaw already follows UE yaw direction. Export/display conversion is:
 
 ```text
 UE Roll = -internal Roll
 UE Pitch = internal Pitch
-UE Yaw = -internal Yaw
+UE Yaw = internal Yaw
 ```
 
-For example, internal `{ p: 0, y: 90, r: 0 }` must export as `{ x: 0, y: 0, z: -90 }`, and internal `{ p: 0, y: 0, r: 90 }` must export as `{ x: -90, y: 0, z: 0 }`.
+For example, internal `{ p: 0, y: 90, r: 0 }` must export as `{ x: 0, y: 0, z: 90 }`, and internal `{ p: 0, y: 0, r: 90 }` must export as `{ x: -90, y: 0, z: 0 }`.
 
 User-facing Rail Detail, downloaded JSON, and UE import must agree exactly on those UE values. Any conversion from old unmarked exports must happen only while importing/migrating that old JSON.
 

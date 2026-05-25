@@ -122,14 +122,14 @@ Rotation values shown in Rail Detail and exported in `Rot_Abs` / `Exit_Rot_Abs` 
 x = Roll, y = Pitch, z = Yaw
 ```
 
-Because the viewer mirrors the logical Y axis for display, exported UE rotations use the matching handedness conversion:
+The generator's logical yaw already follows UE yaw direction; do not negate it because the viewer flips displayed Y positions. The UE-facing conversion is:
 
 ```text
 UE Roll = -internal Roll
 UE Pitch = internal Pitch
-UE Yaw = -internal Yaw
+UE Yaw = internal Yaw
 ```
 
 When UE rotation reaches gimbal lock at `Pitch = +/-90`, Maze Builder uses UE's canonical Euler display form as well. For example, the equivalent value `Roll / Pitch / Yaw = -90 / 90 / 0` is shown and exported as `0 / 90 / 90`, matching the value shown after import in Unreal.
 
-Maze Builder's internal generator still computes rotations as `p/y/r` (`Pitch/Yaw/Roll`), but imported/exported JSON and Rail Detail use the same UE-facing `x/y/z` values. Dragging in an older unmarked export is treated as legacy data so downloading it again rewrites the rotations into the current UE-equivalent convention.
+Maze Builder's internal generator still computes rotations as `p/y/r` (`Pitch/Yaw/Roll`), but imported/exported JSON and Rail Detail use the same UE-facing `x/y/z` values. Dragging in an older unmarked export or a prior inverted-yaw export is migrated on import, so downloading it again rewrites rotations into the current UE-equivalent convention.

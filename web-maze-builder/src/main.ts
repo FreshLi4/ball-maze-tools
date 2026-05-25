@@ -4,7 +4,7 @@ import sampleLayoutRaw from "../maze_layout.json?raw";
 import { loadConfigFromCsv } from "./maze/csv";
 import { calculateOccupiedCellsForConfig, composeRotAbs, exitDirFromLocalRot, MazeGenerator, transformByRotAbs } from "./maze/generator";
 import { buildFamilyDisplayName, parseRailNameParts, railDisplayName } from "./maze/railLibrary";
-import { formatRollPitchYaw, legacyXyzToRotAbs, normalizeRotationInput, rotAbsToUeXyz, UE_ROTATION_CONVENTION } from "./maze/rotation";
+import { formatRollPitchYaw, INVERTED_YAW_ROTATION_CONVENTION, invertedYawXyzToRotAbs, legacyXyzToRotAbs, normalizeRotationInput, rotAbsToUeXyz, UE_ROTATION_CONVENTION } from "./maze/rotation";
 import { DEFAULT_GENERATOR_OPTIONS, GRID_TO_WORLD_SCALE } from "./maze/constants";
 import { MazeLayout, MazeRailJson, RailConfigItem, RotAbs, Vec3Dict, Vector3 } from "./maze/types";
 import { BuildExitTarget, EditorMode, MazeViewer, RailEditAction, RailMeta } from "./viewer/MazeViewer";
@@ -734,7 +734,11 @@ function normalizeLegacyRot(rot: RotAbs | (Partial<RotAbs> & Partial<Vec3Dict>))
 }
 
 function normalizeLayoutRotations(layout: MazeLayout): MazeLayout {
-  const rotationNormalizer = layout.MapMeta.RotationConvention === UE_ROTATION_CONVENTION ? normalizeRot : normalizeLegacyRot;
+  const rotationNormalizer = layout.MapMeta.RotationConvention === UE_ROTATION_CONVENTION
+    ? normalizeRot
+    : layout.MapMeta.RotationConvention === INVERTED_YAW_ROTATION_CONVENTION
+      ? invertedYawXyzToRotAbs
+      : normalizeLegacyRot;
   layout.Rail.forEach((rail) => {
     rail.Rot_Abs = rotationNormalizer(rail.Rot_Abs);
     rail.Exit.forEach((exit) => {

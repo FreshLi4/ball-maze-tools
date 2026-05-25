@@ -10,7 +10,7 @@ import {
   transformByRotAbs,
 } from "../maze/generator";
 import { buildFamilyDisplayName, parseRailNameParts, railDirectionDisplayName, railFamilyDisplayName } from "../maze/railLibrary";
-import { formatRollPitchYaw, legacyXyzToRotAbs, normalizeRotationInput, rotAbsToUeXyz } from "../maze/rotation";
+import { formatRollPitchYaw, invertedYawXyzToRotAbs, legacyXyzToRotAbs, normalizeRotationInput, rotAbsToUeXyz } from "../maze/rotation";
 import { MazeLayout, Vector3 } from "../maze/types";
 
 function expectedDirFromRot(rot: { p: number; y: number; r: number }): "+X" | "+Y" | "-X" | "-Y" | "+Z" | "-Z" {
@@ -73,12 +73,17 @@ function expectConnectedLayoutConsistent(layout: MazeLayout): void {
 }
 
 describe("TypeScript maze port", () => {
-  it("converts internal rotation to mirrored-viewer UE Roll/Pitch/Yaw order", () => {
-    expect(rotAbsToUeXyz({ p: 0, y: 90, r: 0 })).toEqual({ x: 0, y: 0, z: -90 });
+  it("converts internal rotation to UE Roll/Pitch/Yaw with roll handedness correction", () => {
+    expect(rotAbsToUeXyz({ p: 0, y: 90, r: 0 })).toEqual({ x: 0, y: 0, z: 90 });
+    expect(rotAbsToUeXyz({ p: 0, y: 270, r: 0 })).toEqual({ x: 0, y: 0, z: -90 });
     expect(rotAbsToUeXyz({ p: 0, y: 0, r: 90 })).toEqual({ x: -90, y: 0, z: 0 });
     expect(normalizeRotationInput({ x: -90, y: 0, z: 0 })).toEqual({ p: 0, y: 0, r: 90 });
     expect(legacyXyzToRotAbs({ x: 90, y: 0, z: 0 })).toEqual({ p: 0, y: 0, r: 90 });
-    expect(formatRollPitchYaw({ p: 0, y: 90, r: 0 })).toBe("0 / 0 / -90");
+    expect(invertedYawXyzToRotAbs({ x: 0, y: 0, z: 90 })).toEqual({ p: 0, y: 270, r: 0 });
+    expect(rotAbsToUeXyz(legacyXyzToRotAbs({ x: 0, y: 0, z: 270 }))).toEqual({ x: 0, y: 0, z: -90 });
+    expect(rotAbsToUeXyz(invertedYawXyzToRotAbs({ x: 0, y: 0, z: 90 }))).toEqual({ x: 0, y: 0, z: -90 });
+    expect(formatRollPitchYaw({ p: 0, y: 90, r: 0 })).toBe("0 / 0 / 90");
+    expect(formatRollPitchYaw({ p: 0, y: 270, r: 0 })).toBe("0 / 0 / -90");
     expect(formatRollPitchYaw({ p: 0, y: 0, r: 90 })).toBe("-90 / 0 / 0");
     expect(rotAbsToUeXyz({ p: 90, y: 0, r: 90 })).toEqual({ x: 0, y: 90, z: 90 });
     expect(rotAbsToUeXyz(legacyXyzToRotAbs({ x: 90, y: 90, z: 0 }))).toEqual({ x: 0, y: 90, z: 90 });

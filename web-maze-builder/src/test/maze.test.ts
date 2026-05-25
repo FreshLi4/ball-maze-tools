@@ -80,6 +80,9 @@ describe("TypeScript maze port", () => {
     expect(legacyXyzToRotAbs({ x: 90, y: 0, z: 0 })).toEqual({ p: 0, y: 0, r: 90 });
     expect(formatRollPitchYaw({ p: 0, y: 90, r: 0 })).toBe("0 / 0 / -90");
     expect(formatRollPitchYaw({ p: 0, y: 0, r: 90 })).toBe("-90 / 0 / 0");
+    expect(rotAbsToUeXyz({ p: 90, y: 0, r: 90 })).toEqual({ x: 0, y: 90, z: 90 });
+    expect(rotAbsToUeXyz(legacyXyzToRotAbs({ x: 90, y: 90, z: 0 }))).toEqual({ x: 0, y: 90, z: 90 });
+    expect(rotAbsToUeXyz(normalizeRotationInput({ x: 0, y: 90, z: 90 }))).toEqual({ x: 0, y: 90, z: 90 });
   });
 
   it("loads UE CSV config and recognizes key rail types", () => {

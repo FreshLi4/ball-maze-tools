@@ -13,6 +13,17 @@ function signedQuarterTurn(value: number | undefined): number {
   return Object.is(signed, -0) ? 0 : signed;
 }
 
+function canonicalizeUeXyz(rot: Vec3Dict): Vec3Dict {
+  const roll = signedQuarterTurn(rot.x);
+  const pitch = signedQuarterTurn(rot.y);
+  const yaw = signedQuarterTurn(rot.z);
+
+  // At +/-90 pitch, Roll and Yaw are coupled. Match UE's stable display form.
+  if (pitch === 90) return { x: 0, y: pitch, z: signedQuarterTurn(yaw - roll) };
+  if (pitch === -90) return { x: 0, y: pitch, z: signedQuarterTurn(yaw + roll) };
+  return { x: roll, y: pitch, z: yaw };
+}
+
 export function normalizeRotationInput(rot: RotationInput | undefined): RotAbs {
   if (!rot) return { p: 0, y: 0, r: 0 };
   const hasUeXyz = rot.x !== undefined || rot.z !== undefined;
@@ -45,11 +56,11 @@ export function ueXyzToRotAbs(rot: RotationInput | undefined): RotAbs {
 
 export function rotAbsToUeXyz(rot: RotationInput | undefined): Vec3Dict {
   const normalized = normalizeRotationInput(rot);
-  return {
+  return canonicalizeUeXyz({
     x: signedQuarterTurn(-normalized.r),
     y: signedQuarterTurn(normalized.p),
     z: signedQuarterTurn(-normalized.y),
-  };
+  });
 }
 
 export function formatRollPitchYaw(rot: RotationInput | undefined): string {

@@ -98,6 +98,8 @@ For example, internal `{ p: 0, y: 90, r: 0 }` must export as `{ x: 0, y: 0, z: -
 
 User-facing Rail Detail, downloaded JSON, and UE import must agree exactly on those UE values. Any conversion from old unmarked exports must happen only while importing/migrating that old JSON.
 
+At `Pitch = +/-90`, export/display must use the same canonical gimbal-lock representation UE shows: set Roll to `0` and fold its equivalent turn into Yaw. For example, `Roll/Pitch/Yaw = -90/90/0` must be emitted as `0/90/90`.
+
 ## Placement Rules
 
 When placing a child rail:

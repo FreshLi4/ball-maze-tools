@@ -184,7 +184,7 @@ app.innerHTML = `
               <input id="railCountInput" type="number" min="1" step="1" value="${DEFAULT_GENERATOR_OPTIONS.targetRailCount}" />
             </label>
             <label class="field">
-              <span class="help-label" data-help="Checkpoint 数量。为 0 时不放置 checkpoint；大于 0 时每段超过目标难度 / checkpoint 数量后触发一次分叉 checkpoint。">Checkpoints</span>
+              <span class="help-label" data-help="Checkpoint 数量。为 0 时不放置 checkpoint；大于 0 时每段超过目标难度 / (checkpoint 数量 + 1) 后触发一次分叉 checkpoint。">Checkpoints</span>
               <input id="checkpointInput" type="number" min="0" step="1" value="${DEFAULT_GENERATOR_OPTIONS.targetCheckpoints}" />
             </label>
             <label class="field">

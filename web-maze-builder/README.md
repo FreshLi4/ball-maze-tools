@@ -104,6 +104,8 @@ Seed controls random choices such as start rail, start position, open connector 
 
 `Target rails` produces an average target difficulty per rail. While growing a maze, the generator prefers candidates that pull accumulated difficulty back toward that expected curve. This changes attempt order only; fitting fallback candidates remain available.
 
+For `N` checkpoints, the maze has `N + 1` difficulty segments. The checkpoint threshold is therefore `target difficulty / (N + 1)`. Once a segment crosses that threshold, generation backs up and keeps retrying a fork-plus-checkpoint placement earlier in the segment rather than placing ordinary rails past the threshold.
+
 ## Rail Config CSV
 
 The default `rail_config.csv` uses the normalized rail config format:

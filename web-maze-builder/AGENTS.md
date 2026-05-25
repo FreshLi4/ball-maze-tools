@@ -118,12 +118,13 @@ When placing a child rail:
 ## Checkpoint Rules
 
 - Checkpoint count minimum is 0.
-- For target difficulty `a` and checkpoint count `n`, when `n > 0`, checkpoint threshold is `a / n`.
+- For target difficulty `a` and checkpoint count `n`, when `n > 0`, checkpoint threshold is `a / (n + 1)` because `n` checkpoints divide the maze into `n + 1` segments.
 - When threshold is exceeded:
   - backtrack one rail,
   - place a fork rail with at least two exits,
   - place checkpoint on one exit,
   - leave another exit for continuing generation.
+- If the fork/checkpoint pair cannot be placed at the backed-up connector, keep checkpoint placement forced, backtrack again, and retry at the preceding connector. Do not resume ordinary growth beyond the segment threshold.
 - Track segment difficulties in `MapMeta.SegmentDiffs`.
 
 ## Seed Rules

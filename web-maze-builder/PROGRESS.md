@@ -23,8 +23,9 @@ Current work focuses on the TypeScript/Vite generator and viewer in `src/`. The 
 ### Checkpoint Logic
 
 - Checkpoint count is configurable with minimum 0.
-- When checkpoint count is greater than 0, generator tracks segment difficulty.
-- On checkpoint threshold, generator backtracks one rail and attempts to place a fork rail with at least two exits.
+- When checkpoint count is greater than 0, generator tracks segment difficulty against `target difficulty / (checkpoint count + 1)`.
+- On checkpoint threshold, generator backtracks one rail and attempts to place a fork rail with at least two exits at that connector.
+- If fork/checkpoint placement fails there, the generator remains in forced checkpoint mode and backtracks again to retry instead of continuing normal growth.
 - One fork exit places checkpoint, another can continue maze generation.
 - Stats and `MapMeta` include segment difficulties.
 

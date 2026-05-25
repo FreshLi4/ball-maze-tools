@@ -466,6 +466,7 @@ describe("TypeScript maze port", () => {
     expect(checkpoints).toHaveLength(2);
     expect(layout.MapMeta.CheckpointCount).toBe(2);
     expect(layout.MapMeta.SegmentDiffs).toHaveLength(3);
+    expect(layout.MapMeta.SegmentDiffs?.slice(0, -1).every((diff) => diff > 0)).toBe(true);
 
     for (const checkpoint of checkpoints) {
       const parent = layout.Rail.find((rail) => rail.Rail_Index === checkpoint.Prev_Index);
@@ -475,19 +476,45 @@ describe("TypeScript maze port", () => {
     }
   });
 
-  it("does not force a checkpoint after backtracking removes all segment progress", () => {
+  it("uses checkpoint count plus one as the number of target segments", () => {
     const config = loadConfigFromCsv(railConfigCsv);
-    const layout = new MazeGenerator(config, {
-      seed: 654324621,
-      targetDifficulty: 25,
-      targetCheckpoints: 3,
-      maxSpins: 3,
-      bounds: new Vector3(13, 7, 3),
-    }).generate();
+    const generator = new MazeGenerator(config, {
+      seed: 20260425,
+      targetDifficulty: 15,
+      targetCheckpoints: 2,
+      maxSpins: 4,
+      bounds: new Vector3(13, 13, 5),
+    });
+    generator.generate();
+    expect(generator.logs.some((entry) => entry.message.includes("segment diff threshold: 5.00"))).toBe(true);
+  });
 
-    expect(layout.MapMeta.CheckpointCount).toBeGreaterThan(0);
-    expect(layout.MapMeta.SegmentDiffs).toHaveLength((layout.MapMeta.CheckpointCount ?? 0) + 1);
-    expect(layout.MapMeta.SegmentDiffs?.slice(0, -1).every((diff) => diff > 0)).toBe(true);
+  it("backtracks and retries instead of resuming normal growth when checkpoint fork placement fails", () => {
+    const config = loadConfigFromCsv(railConfigCsv);
+    const generator = new MazeGenerator(config, {
+      seed: 20260425,
+      targetDifficulty: 15,
+      targetCheckpoints: 1,
+      maxSpins: 4,
+      bounds: new Vector3(13, 13, 7),
+    });
+    const placeCheckpoint = generator["placeCheckpointOnFork"].bind(generator);
+    let rejectedForks = 0;
+    let rejectedPosition = "";
+    generator["placeCheckpointOnFork"] = (fork, accumulatedDiff) => {
+      const position = JSON.stringify(fork.posRev.toDict());
+      if (rejectedPosition === "") rejectedPosition = position;
+      if (position === rejectedPosition) {
+        rejectedForks += 1;
+        return null;
+      }
+      return placeCheckpoint(fork, accumulatedDiff);
+    };
+
+    const layout = generator.generate();
+    expect(rejectedForks).toBeGreaterThan(0);
+    expect(generator.logs.some((entry) => entry.message.includes("Backtracked again to retry checkpoint placement"))).toBe(true);
+    expect(layout.MapMeta.CheckpointCount).toBe(1);
   });
 
   it("keeps child enter direction aligned with the parent exit after pitched fork exits", () => {

@@ -223,34 +223,38 @@ export class MazeGenerator {
     this.log("success", `Start: ${start.rowName}, ${this.formatRailPose(startResult)}`);
 
     const checkpointTarget = Math.max(0, Math.floor(this.options.targetCheckpoints));
-    const segmentTargetDiff = checkpointTarget > 0 ? this.options.targetDifficulty / checkpointTarget : Infinity;
+    const segmentTargetDiff = checkpointTarget > 0 ? this.options.targetDifficulty / (checkpointTarget + 1) : Infinity;
     let forceCheckpoint = false;
+    let forcedCheckpointConnector: OpenConnector | null = null;
     if (checkpointTarget > 0) this.log("info", `Checkpoint target: ${checkpointTarget}, segment diff threshold: ${segmentTargetDiff.toFixed(2)}`);
 
     while (true) {
       const allCheckpointsPlaced = this.placedCheckpointsCount >= checkpointTarget;
       const mustEnd = this.currentTotalDifficulty >= this.options.targetDifficulty && allCheckpointsPlaced;
       const hasSegmentProgress = this.segmentDiffAcc > 0;
-      if (forceCheckpoint && !hasSegmentProgress) forceCheckpoint = false;
       const triggerCheckpoint =
         !mustEnd &&
-        hasSegmentProgress &&
         (forceCheckpoint ||
-          (this.placedCheckpointsCount < checkpointTarget && this.segmentDiffAcc > segmentTargetDiff));
+          (hasSegmentProgress && this.placedCheckpointsCount < checkpointTarget && this.segmentDiffAcc > segmentTargetDiff));
 
       if (triggerCheckpoint && !forceCheckpoint) {
-        if (!this.backtrackLastRail()) break;
+        forcedCheckpointConnector = this.backtrackForCheckpointConnector();
+        if (!forcedCheckpointConnector) break;
         forceCheckpoint = true;
         this.log("info", `Checkpoint threshold reached. Backtracked 1 rail before placing checkpoint fork.`);
         continue;
       }
 
-      if (this.openList.length === 0) {
+      if (!forceCheckpoint && this.openList.length === 0) {
         if (!this.backtrackLastRail()) break;
         continue;
       }
 
-      const connector = this.openList.splice(this.random.int(0, this.openList.length - 1), 1)[0];
+      const connector = forceCheckpoint
+        ? forcedCheckpointConnector
+        : this.openList.splice(this.random.int(0, this.openList.length - 1), 1)[0];
+      forcedCheckpointConnector = null;
+      if (!connector) break;
       const candidates = this.getCandidates(mustEnd, triggerCheckpoint).filter(
         (candidate) => !connector.forbiddenCandidates.has(candidate),
       );
@@ -324,8 +328,12 @@ export class MazeGenerator {
           `Step failed at pos=${this.formatVec(connector.targetPos)}, parent=${connector.parentId}, exit=${connector.parentExitIdx}, baseDir=${forwardDirFromRotAbs(this.exitRotAbs(connector))}, baseRot=${this.formatRot(this.exitRotAbs(connector))}: ${JSON.stringify(Object.fromEntries(failReasons))}`,
         );
         if (forceCheckpoint) {
-          forceCheckpoint = false;
-          this.log("warn", "Checkpoint fork placement failed. Resuming normal growth until the segment threshold is reached again.");
+          forcedCheckpointConnector = this.backtrackForCheckpointConnector();
+          if (!forcedCheckpointConnector) {
+            this.log("fail", "Checkpoint fork placement failed and no earlier placement remains for retry.");
+            break;
+          }
+          this.log("warn", "Checkpoint fork placement failed. Backtracked again to retry checkpoint placement earlier in the segment.");
         }
       } else if (placed) {
         this.log(
@@ -565,6 +573,11 @@ export class MazeGenerator {
     });
 
     return true;
+  }
+
+  private backtrackForCheckpointConnector(): OpenConnector | null {
+    if (!this.backtrackLastRail()) return null;
+    return this.openList.pop() ?? null;
   }
 
   private rollbackPlacedRail(rail: RailInstance): void {

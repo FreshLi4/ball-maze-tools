@@ -94,12 +94,22 @@ def _dependency_options() -> object:
 
 
 def _selected_root_path() -> str:
+    if hasattr(unreal.EditorUtilityLibrary, "get_current_content_browser_path"):
+        current_path = unreal.EditorUtilityLibrary.get_current_content_browser_path()
+        if current_path:
+            return _normalize_package_name(current_path)
+
     selected_folders = unreal.EditorUtilityLibrary.get_selected_folder_paths()
-    if not selected_folders:
-        raise RuntimeError("Select one Content Browser folder before running the script.")
-    if len(selected_folders) > 1:
-        _warn(f"Multiple folders selected; using the first one: {selected_folders[0]}")
-    return _normalize_package_name(selected_folders[0])
+    if selected_folders:
+        if len(selected_folders) > 1:
+            _warn(f"Multiple folders selected; using the first one: {selected_folders[0]}")
+        return _normalize_package_name(selected_folders[0])
+
+    selected_assets = unreal.EditorUtilityLibrary.get_selected_asset_data()
+    if selected_assets:
+        return _normalize_package_name(selected_assets[0].package_path)
+
+    raise RuntimeError("Open or select one Content Browser folder before running the script.")
 
 
 def _query_packages(asset_registry: object, method_name: str, package_name: str, options: object) -> List[str]:

@@ -12,7 +12,7 @@ Unreal Editor Python 工具：检查 Content Browser 中选中文件夹的资产
 
 ## 使用方式
 
-1. 在 Content Browser 中选中一个文件夹。
+1. 在 Content Browser 中进入要检查的文件夹。旧版 UE 若无法读取当前地址，可改为选中文件夹；选中资产时也会回退到该资产所在目录。
 2. 在 Unreal Editor 中使用 `Tools > Execute Python Script` 运行需要的入口脚本，例如：
 
 ```text

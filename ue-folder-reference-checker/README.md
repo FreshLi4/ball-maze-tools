@@ -2,13 +2,33 @@
 
 Unreal Editor Python 工具：检查 Content Browser 中选中文件夹的资产引用是否跨出该文件夹，并导出 CSV。
 
-## 三种入口
+## 检查入口
 
 | Script | 检查内容 |
 |---|---|
 | `check_referenced_by_external.py` | 文件夹内资产是否被外部资产引用 |
 | `check_referencing_external.py` | 文件夹内资产是否引用外部资产 |
 | `check_external_references_both.py` | 同时检查上述两个方向 |
+
+## 迁移入口
+
+`migrate_referenced_by_external.py` 是独立的增强型入口。它查找文件夹内被外部资产引用的资产，然后将每个被查出的资产移动到第一个外部引用者所在文件夹下的 `ReferenceMigrated` 子文件夹。
+
+例如，第一个外部引用者为：
+
+```text
+/Game/Item/Gimmick/Material/MI_Grass_Rock_Tri_01
+```
+
+被检查资产 `M_Triplainar_Base` 会移动到：
+
+```text
+/Game/Item/Gimmick/Material/ReferenceMigrated/M_Triplainar_Base
+```
+
+外部引用者按 package path 排序，因此“第一个”引用者是稳定的。若目标位置已经存在同名资产，脚本会跳过该资产并报告，不会覆盖。
+
+迁移入口会在日志和消息弹窗中汇总移动、跳过和失败结果，不导出 CSV。三个只读检查入口仍按下方流程导出 CSV。
 
 ## 使用方式
 

@@ -8,7 +8,9 @@ references that cross the boundary of a selected Content Browser folder.
 ## Rules
 
 - Read the root `AGENTS.md` before editing this tool.
-- Keep Asset Registry queries package-based and avoid loading assets.
+- Keep Asset Registry queries package-based and avoid loading assets, except
+  `Referenced By` checks may load assets to confirm referencers when matching
+  Unreal delete-confirmation behavior.
 - Do not call Unreal Editor APIs from worker threads.
 - Keep the three reporting entry scripts thin; shared reporting behavior
   belongs in `folder_reference_checker.py`.

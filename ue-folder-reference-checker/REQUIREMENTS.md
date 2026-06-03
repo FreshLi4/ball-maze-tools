@@ -14,6 +14,8 @@
   - [x] 配置路径为空或无效时弹出系统保存框
   - [x] 配置路径有效时直接保存
 - [x] [UE-FRC-008] 进入 Content Browser 文件夹后可直接运行，并兼容旧版 UE 的文件夹或资产选择回退 #bugfix #P0
+- [x] [UE-FRC-011] `Referenced By` 使用加载确认后的 package referencer 查询，贴近删除确认弹窗的 Asset Referencers 结果 #bugfix #P0
+- [x] [UE-FRC-012] CSV 默认文件名包含检查模式、被检查文件夹名和日期时间，避免重复覆盖 #feature #P1
 
 ## 引用资产迁移
 

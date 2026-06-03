@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
 
@@ -121,6 +122,24 @@ def _query_packages(asset_registry: object, method_name: str, package_name: str,
     return sorted({_normalize_package_name(value) for value in values if str(value)})
 
 
+def _query_confirmed_referencers(package_name: str) -> List[str]:
+    finder = getattr(unreal.EditorAssetLibrary, "find_package_referencers_for_asset", None)
+    if finder is None:
+        subsystem_class = getattr(unreal, "EditorAssetSubsystem", None)
+        get_subsystem = getattr(unreal, "get_editor_subsystem", None)
+        if subsystem_class is not None and get_subsystem is not None:
+            subsystem = get_subsystem(subsystem_class)
+            finder = getattr(subsystem, "find_package_referencers_for_asset", None)
+    if finder is None:
+        raise RuntimeError("Unable to access Unreal package referencer confirmation API.")
+    try:
+        values = finder(package_name, True)
+    except Exception as exc:
+        _warn(f"Unable to confirm package referencers for {package_name}: {exc}")
+        return []
+    return sorted({_normalize_package_name(value) for value in values if str(value)})
+
+
 def _external_references(package_names: Iterable[str], root_path: str) -> Tuple[ExternalReference, ...]:
     return tuple(
         ExternalReference(_asset_name(package_name), package_name)
@@ -149,7 +168,7 @@ def _scan(mode: str) -> Tuple[str, List[AssetReport]]:
             referencing: Tuple[ExternalReference, ...] = ()
             if mode in (MODE_REFERENCED_BY, MODE_BOTH):
                 referenced_by = _external_references(
-                    _query_packages(registry, "get_referencers", package_name, options),
+                    _query_confirmed_referencers(package_name),
                     root_path,
                 )
             if mode in (MODE_REFERENCING, MODE_BOTH):
@@ -200,7 +219,28 @@ def _configured_output_path() -> Optional[Path]:
     return None
 
 
-def _prompt_windows_output_path() -> Optional[Path]:
+def _safe_filename_part(value: str) -> str:
+    invalid_characters = '<>:"/\\|?*'
+    cleaned = "".join("_" if character in invalid_characters else character for character in value.strip())
+    return cleaned.strip(" .") or "Content"
+
+
+def _mode_filename_prefix(mode: str) -> str:
+    values = {
+        MODE_REFERENCED_BY: "referenced_by_external",
+        MODE_REFERENCING: "referencing_external",
+        MODE_BOTH: "external_references_both",
+    }
+    return values[mode]
+
+
+def _default_csv_filename(mode: str, root_path: str) -> str:
+    folder_name = _safe_filename_part(root_path.rsplit("/", 1)[-1])
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"{_mode_filename_prefix(mode)}-{folder_name}-{timestamp}.csv"
+
+
+def _prompt_windows_output_path(mode: str, root_path: str) -> Optional[Path]:
     if sys.platform != "win32":
         return None
     try:
@@ -234,7 +274,7 @@ def _prompt_windows_output_path() -> Optional[Path]:
                 ("FlagsEx", wintypes.DWORD),
             ]
 
-        buffer = ctypes.create_unicode_buffer("folder-reference-report.csv", 32768)
+        buffer = ctypes.create_unicode_buffer(_default_csv_filename(mode, root_path), 32768)
         dialog = OpenFileNameW()
         dialog.lStructSize = ctypes.sizeof(OpenFileNameW)
         dialog.lpstrFilter = "CSV files (*.csv)\0*.csv\0All files (*.*)\0*.*\0"
@@ -251,8 +291,8 @@ def _prompt_windows_output_path() -> Optional[Path]:
         return None
 
 
-def _prompt_output_path() -> Optional[Path]:
-    windows_path = _prompt_windows_output_path()
+def _prompt_output_path(mode: str, root_path: str) -> Optional[Path]:
+    windows_path = _prompt_windows_output_path(mode, root_path)
     if windows_path:
         return windows_path
     try:
@@ -270,7 +310,7 @@ def _prompt_output_path() -> Optional[Path]:
             title="Save Folder Reference Report",
             defaultextension=".csv",
             filetypes=(("CSV files", "*.csv"), ("All files", "*.*")),
-            initialfile="folder-reference-report.csv",
+            initialfile=_default_csv_filename(mode, root_path),
         )
     finally:
         root.destroy()
@@ -323,7 +363,7 @@ def run(mode: str) -> None:
         root_path, reports = _scan(mode)
         message = _format_message(root_path, reports, mode)
         _show_message("Folder Reference Checker", message)
-        output_path = _configured_output_path() or _prompt_output_path()
+        output_path = _configured_output_path() or _prompt_output_path(mode, root_path)
         if output_path:
             _write_csv(output_path, reports, mode)
         else:

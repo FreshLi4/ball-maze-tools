@@ -13,6 +13,7 @@ Imports a Maze Builder JSON layout into the current Unreal Engine level.
 - Supports an explicit destructive cleanup option for replacing every actor in the import folder.
 - Places Blueprint/Class actors only.
 - If the CSV only contains Proxy StaticMesh references, the importer derives a sibling BP path from those references and fails loudly if it cannot load the BP.
+- Supports both legacy Maze Builder JSON (`Rail`, `Rail_ID`, `Pos_Rev`/`Pos_Abs`) and `.bmmaze.json` exports (`Rails`, `RailID`, `AnchorCoord`).
 
 ## Run
 
@@ -41,4 +42,4 @@ Edit the top of `import_json_rails_to_level.py` when needed:
 
 ## Notes
 
-Maze Builder JSON is the data contract. If a rail fails to import, first check whether the DataTable row name matches the JSON `Rail_ID` and whether `RailClassRef` points to a valid BlueprintGeneratedClass.
+Maze Builder JSON is the data contract. If a rail fails to import, first check whether the DataTable row name matches the JSON `Rail_ID`/`RailID` and whether `RailClassRef` points to a valid BlueprintGeneratedClass.

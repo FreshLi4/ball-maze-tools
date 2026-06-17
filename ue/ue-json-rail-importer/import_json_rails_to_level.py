@@ -565,15 +565,17 @@ def _append_unique_refs(target: List[RailRef], incoming: Iterable[RailRef]) -> N
 
 def _layout_rails(layout: dict) -> List[dict]:
     rails = layout.get("Rail")
+    if rails is None:
+        rails = layout.get("Rails")
     if not isinstance(rails, list):
-        raise RuntimeError("Layout JSON must contain a Rail array.")
+        raise RuntimeError("Layout JSON must contain a Rail or Rails array.")
     return rails
 
 
 def _rail_id(rail: dict) -> str:
-    value = rail.get("Rail_ID") or rail.get("Name")
+    value = rail.get("Rail_ID") or rail.get("RailID") or rail.get("Name")
     if not isinstance(value, str) or not value.strip():
-        raise RuntimeError(f"Rail entry is missing Rail_ID/Name: {rail}")
+        raise RuntimeError(f"Rail entry is missing Rail_ID/RailID/Name: {rail}")
     return value.strip()
 
 
@@ -875,9 +877,10 @@ def _rail_location(rail: dict) -> unreal.Vector:
         value = rail.get(key)
         if isinstance(value, dict):
             return _vec_from_json(value)
-    value = rail.get("Pos_Rev")
-    if isinstance(value, dict):
-        return _vec_from_grid_json(value)
+    for key in ("Pos_Rev", "AnchorCoord"):
+        value = rail.get(key)
+        if isinstance(value, dict):
+            return _vec_from_grid_json(value)
     return _vec_from_json({})
 
 
@@ -992,9 +995,13 @@ def _object_name(obj) -> str:
 def _grid_extent_from_layout(rails: Sequence[dict]) -> int:
     max_abs = 0
     for rail in rails:
-        cells = rail.get("Occupied_Cells_Rev") or [rail.get("Pos_Rev") or {}]
+        cells = rail.get("Occupied_Cells_Rev") or [rail.get("Pos_Rev") or rail.get("AnchorCoord") or {}]
         for cell in cells:
-            max_abs = max(max_abs, abs(int(cell.get("x", 0))), abs(int(cell.get("y", 0))))
+            max_abs = max(
+                max_abs,
+                abs(int(_number_from_json(cell, ("x", "X")))),
+                abs(int(_number_from_json(cell, ("y", "Y")))),
+            )
     return max(1, max_abs * 2 + 1)
 
 

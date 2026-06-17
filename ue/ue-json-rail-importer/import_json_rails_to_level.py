@@ -1089,6 +1089,35 @@ def _try_set_editor_property(actor, names: Sequence[str], value) -> None:
             pass
 
 
+def _try_generate_rail_meshes(actor) -> None:
+    """Try to trigger rail mesh generation on a BP_Rail actor."""
+    candidates = (
+        "GenerateRailMeshes",
+        "GenerateMeshes",
+        "BuildRailMeshes",
+        "BuildMeshes",
+        "RegenerateMeshes",
+        "UpdateMeshes",
+    )
+
+    for func_name in candidates:
+        try:
+            actor.call_method(func_name, ())
+            _log(f"Called {func_name} on {actor.get_actor_label()}")
+            return
+        except Exception:
+            pass
+
+    try:
+        actor.rerun_construction_scripts()
+        _log(f"Rerun construction scripts on {actor.get_actor_label()}")
+        return
+    except Exception:
+        pass
+
+    _warn(f"Could not trigger mesh generation on {actor.get_actor_label()}. Tried: {', '.join(candidates)} and rerun_construction_scripts.")
+
+
 def _pick_layout_json() -> Optional[Path]:
     if not PROMPT_FOR_JSON_ON_RUN:
         return None
@@ -1293,9 +1322,10 @@ def import_json_rails(layout_json: Optional[Path] = None, rail_config_csv: Path 
             task.enter_progress_frame(1, f"{rail_index}: {rail_id}")
             cache_key = rail_cache_keys[rail_id]
 
-            label = f"MazeRail_{rail_index}_{_safe_label(rail_id)}"
+            label = f"Rail_{rail_index}_{_safe_label(rail_id)}"
             actor = _spawn_actor(class_cache[cache_key], location, rotation, label)
             _try_set_editor_property(actor, ("Rail_ID", "RailID", "RailId", "RowName", "RailRowName", "ConfigRowName"), rail_id)
+            _try_generate_rail_meshes(actor)
             spawned.append(actor)
 
     _set_selected_actors(spawned)

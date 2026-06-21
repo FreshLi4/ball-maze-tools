@@ -35,6 +35,24 @@ void UP4CommandLineSourceControlSettings::LoadSettings()
     {
         P4Password = FPlatformMisc::GetEnvironmentVariable(TEXT("P4PASSWD"));
     }
+    
+    // Fallback to native PerforceSourceControl plugin settings
+    if (P4Port.IsEmpty())
+    {
+        GConfig->GetString(TEXT("PerforceSourceControl"), TEXT("Port"), P4Port, GEditorPerProjectIni);
+    }
+    if (P4User.IsEmpty())
+    {
+        GConfig->GetString(TEXT("PerforceSourceControl"), TEXT("UserName"), P4User, GEditorPerProjectIni);
+    }
+    if (P4Client.IsEmpty())
+    {
+        GConfig->GetString(TEXT("PerforceSourceControl"), TEXT("Workspace"), P4Client, GEditorPerProjectIni);
+    }
+    if (P4Password.IsEmpty())
+    {
+        GConfig->GetString(TEXT("PerforceSourceControl"), TEXT("Password"), P4Password, GEditorPerProjectIni);
+    }
 }
 
 void UP4CommandLineSourceControlSettings::SaveSettings() const

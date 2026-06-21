@@ -228,6 +228,11 @@ bool FP4CommandLineSourceControlUtils::ParseInfoResult(const FString& InResults,
 
 bool FP4CommandLineSourceControlUtils::RunP4Command(const FString& InCommand, const FString& InParameters, FString& OutResults, FString& OutErrors, int32& OutReturnCode)
 {
+    return RunP4Command(InCommand, InParameters, FString(), FString(), FString(), FString(), OutResults, OutErrors, OutReturnCode);
+}
+
+bool FP4CommandLineSourceControlUtils::RunP4Command(const FString& InCommand, const FString& InParameters, const FString& InP4Port, const FString& InP4User, const FString& InP4Client, const FString& InP4Password, FString& OutResults, FString& OutErrors, int32& OutReturnCode)
+{
     FString P4Path = GetP4ExecutablePath();
     if (P4Path.IsEmpty())
     {
@@ -236,7 +241,25 @@ bool FP4CommandLineSourceControlUtils::RunP4Command(const FString& InCommand, co
         return false;
     }
     
-    FString FullParameters = FString::Printf(TEXT("%s %s"), *InCommand, *InParameters);
+    FString CredentialsPrefix;
+    if (!InP4Port.IsEmpty())
+    {
+        CredentialsPrefix += FString::Printf(TEXT("-p %s "), *InP4Port);
+    }
+    if (!InP4User.IsEmpty())
+    {
+        CredentialsPrefix += FString::Printf(TEXT("-u %s "), *InP4User);
+    }
+    if (!InP4Client.IsEmpty())
+    {
+        CredentialsPrefix += FString::Printf(TEXT("-c %s "), *InP4Client);
+    }
+    if (!InP4Password.IsEmpty())
+    {
+        CredentialsPrefix += FString::Printf(TEXT("-P %s "), *InP4Password);
+    }
+    
+    FString FullParameters = FString::Printf(TEXT("%s%s %s"), *CredentialsPrefix, *InCommand, *InParameters);
     
     void* ReadPipe = nullptr;
     void* WritePipe = nullptr;

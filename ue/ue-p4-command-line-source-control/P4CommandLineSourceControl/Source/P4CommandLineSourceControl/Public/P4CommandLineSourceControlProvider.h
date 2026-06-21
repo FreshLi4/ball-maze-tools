@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "ISourceControlProvider.h"
+#include "P4CommandLineSourceControlSettings.h"
 
 class FP4CommandLineSourceControlState;
 
@@ -51,9 +52,11 @@ public:
 private:
     bool CheckP4Availability();
     TSharedRef<FP4CommandLineSourceControlState> GetStateInternal(const FString& Filename);
+    void GetCredentials(FString& OutP4Port, FString& OutP4User, FString& OutP4Client, FString& OutP4Password) const;
 
     bool bSourceControlAvailable;
     FName ProviderName;
     TMap<FString, TSharedRef<FP4CommandLineSourceControlState>> StateCache;
     FSourceControlStateChanged OnSourceControlStateChanged;
+    TStrongObjectPtr<UP4CommandLineSourceControlSettings> Settings;
 };

@@ -4,6 +4,8 @@
 #include "Modules/ModuleInterface.h"
 #include "P4CommandLineSourceControlProvider.h"
 
+DECLARE_LOG_CATEGORY_EXTERN(LogP4CommandLine, Log, All);
+
 class FP4CommandLineSourceControlModule : public IModuleInterface
 {
 public:

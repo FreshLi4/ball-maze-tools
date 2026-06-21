@@ -1,4 +1,5 @@
 #include "P4CommandLineSourceControlProvider.h"
+#include "P4CommandLineSourceControlModule.h"
 #include "P4CommandLineSourceControlState.h"
 #include "P4CommandLineSourceControlUtils.h"
 #include "P4CommandLineSourceControlSettings.h"
@@ -94,7 +95,7 @@ ECommandResult::Type FP4CommandLineSourceControlProvider::GetState(const TArray<
         int32 ReturnCode = 0;
         FString P4Port, P4User, P4Client, P4Password;
         GetCredentials(P4Port, P4User, P4Client, P4Password);
-        bool bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("fstat"), Parameters, P4Port, P4User, P4Client, P4Password, Results, Errors, ReturnCode);
+        bool bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("fstat"), Parameters, P4Port, P4User, P4Client, P4Password, Settings.IsValid() ? Settings->GetP4ExecutablePath() : FString(), Results, Errors, ReturnCode);
         if (bSuccess && ReturnCode == 0)
         {
             TArray<FSourceControlStateRef> NewStates;
@@ -176,7 +177,7 @@ ECommandResult::Type FP4CommandLineSourceControlProvider::Execute(const FSourceC
             FileList += FString::Printf(TEXT("%s "), *FP4CommandLineSourceControlUtils::SanitizeFilename(File));
         }
         FString Parameters = FString::Printf(TEXT("-T \"depotFile,clientFile,headRev,haveRev,action,otherOpen,otherOpen0,user\" %s"), *FileList);
-        bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("fstat"), Parameters, P4Port, P4User, P4Client, P4Password, Results, Errors, ReturnCode);
+        bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("fstat"), Parameters, P4Port, P4User, P4Client, P4Password, Settings.IsValid() ? Settings->GetP4ExecutablePath() : FString(), Results, Errors, ReturnCode);
         if (bSuccess && ReturnCode == 0)
         {
             TArray<FSourceControlStateRef> NewStates;
@@ -196,7 +197,7 @@ ECommandResult::Type FP4CommandLineSourceControlProvider::Execute(const FSourceC
         {
             FileList += FString::Printf(TEXT("%s "), *FP4CommandLineSourceControlUtils::SanitizeFilename(File));
         }
-        bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("edit"), FileList, P4Port, P4User, P4Client, P4Password, Results, Errors, ReturnCode);
+        bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("edit"), FileList, P4Port, P4User, P4Client, P4Password, Settings.IsValid() ? Settings->GetP4ExecutablePath() : FString(), Results, Errors, ReturnCode);
     }
     else if (InOperation->GetName() == FName("Revert"))
     {
@@ -205,7 +206,7 @@ ECommandResult::Type FP4CommandLineSourceControlProvider::Execute(const FSourceC
         {
             FileList += FString::Printf(TEXT("%s "), *FP4CommandLineSourceControlUtils::SanitizeFilename(File));
         }
-        bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("revert"), FString::Printf(TEXT("-k %s"), *FileList), P4Port, P4User, P4Client, P4Password, Results, Errors, ReturnCode);
+        bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("revert"), FString::Printf(TEXT("-k %s"), *FileList), P4Port, P4User, P4Client, P4Password, Settings.IsValid() ? Settings->GetP4ExecutablePath() : FString(), Results, Errors, ReturnCode);
     }
     else if (InOperation->GetName() == FName("MarkForAdd"))
     {
@@ -214,7 +215,7 @@ ECommandResult::Type FP4CommandLineSourceControlProvider::Execute(const FSourceC
         {
             FileList += FString::Printf(TEXT("%s "), *FP4CommandLineSourceControlUtils::SanitizeFilename(File));
         }
-        bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("add"), FileList, P4Port, P4User, P4Client, P4Password, Results, Errors, ReturnCode);
+        bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("add"), FileList, P4Port, P4User, P4Client, P4Password, Settings.IsValid() ? Settings->GetP4ExecutablePath() : FString(), Results, Errors, ReturnCode);
     }
     else if (InOperation->GetName() == FName("Delete"))
     {
@@ -223,7 +224,7 @@ ECommandResult::Type FP4CommandLineSourceControlProvider::Execute(const FSourceC
         {
             FileList += FString::Printf(TEXT("%s "), *FP4CommandLineSourceControlUtils::SanitizeFilename(File));
         }
-        bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("delete"), FileList, P4Port, P4User, P4Client, P4Password, Results, Errors, ReturnCode);
+        bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("delete"), FileList, P4Port, P4User, P4Client, P4Password, Settings.IsValid() ? Settings->GetP4ExecutablePath() : FString(), Results, Errors, ReturnCode);
     }
     else if (InOperation->GetName() == FName("CheckIn"))
     {
@@ -237,7 +238,7 @@ ECommandResult::Type FP4CommandLineSourceControlProvider::Execute(const FSourceC
                 FileList += FString::Printf(TEXT("%s "), *FP4CommandLineSourceControlUtils::SanitizeFilename(File));
             }
             FString Parameters = FString::Printf(TEXT("-d \"%s\" %s"), *Description, *FileList);
-            bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("submit"), Parameters, P4Port, P4User, P4Client, P4Password, Results, Errors, ReturnCode);
+            bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("submit"), Parameters, P4Port, P4User, P4Client, P4Password, Settings.IsValid() ? Settings->GetP4ExecutablePath() : FString(), Results, Errors, ReturnCode);
         }
     }
     ECommandResult::Type Result = bSuccess ? ECommandResult::Succeeded : ECommandResult::Failed;
@@ -331,7 +332,12 @@ bool FP4CommandLineSourceControlProvider::CheckP4Availability()
     int32 ReturnCode = 0;
     FString P4Port, P4User, P4Client, P4Password;
     GetCredentials(P4Port, P4User, P4Client, P4Password);
-    bSourceControlAvailable = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("info"), TEXT(""), P4Port, P4User, P4Client, P4Password, Results, Errors, ReturnCode) && (ReturnCode == 0);
+    FString P4ExecutablePath = Settings.IsValid() ? Settings->GetP4ExecutablePath() : FString();
+    bSourceControlAvailable = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("info"), TEXT(""), P4Port, P4User, P4Client, P4Password, P4ExecutablePath, Results, Errors, ReturnCode) && (ReturnCode == 0);
+    if (!bSourceControlAvailable)
+    {
+        UE_LOG(LogP4CommandLine, Warning, TEXT("P4CommandLine: Failed to connect. Port=%s User=%s Client=%s Error=%s"), *P4Port, *P4User, *P4Client, *Errors);
+    }
     return bSourceControlAvailable;
 }
 

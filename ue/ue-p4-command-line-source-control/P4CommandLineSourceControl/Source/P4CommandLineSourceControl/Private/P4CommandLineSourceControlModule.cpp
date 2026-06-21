@@ -3,6 +3,8 @@
 #include "Modules/ModuleManager.h"
 #include "Features/IModularFeatures.h"
 
+DEFINE_LOG_CATEGORY(LogP4CommandLine);
+
 #define LOCTEXT_NAMESPACE "P4CommandLineSourceControl"
 
 void FP4CommandLineSourceControlModule::StartupModule()

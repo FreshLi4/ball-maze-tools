@@ -1,4 +1,5 @@
 #include "P4CommandLineSourceControlUtils.h"
+#include "P4CommandLineSourceControlModule.h"
 #include "P4CommandLineSourceControlState.h"
 #include "P4CommandLineSourceControlRevision.h"
 #include "HAL/PlatformFilemanager.h"
@@ -228,15 +229,16 @@ bool FP4CommandLineSourceControlUtils::ParseInfoResult(const FString& InResults,
 
 bool FP4CommandLineSourceControlUtils::RunP4Command(const FString& InCommand, const FString& InParameters, FString& OutResults, FString& OutErrors, int32& OutReturnCode)
 {
-    return RunP4Command(InCommand, InParameters, FString(), FString(), FString(), FString(), OutResults, OutErrors, OutReturnCode);
+    return RunP4Command(InCommand, InParameters, FString(), FString(), FString(), FString(), FString(), OutResults, OutErrors, OutReturnCode);
 }
 
-bool FP4CommandLineSourceControlUtils::RunP4Command(const FString& InCommand, const FString& InParameters, const FString& InP4Port, const FString& InP4User, const FString& InP4Client, const FString& InP4Password, FString& OutResults, FString& OutErrors, int32& OutReturnCode)
+bool FP4CommandLineSourceControlUtils::RunP4Command(const FString& InCommand, const FString& InParameters, const FString& InP4Port, const FString& InP4User, const FString& InP4Client, const FString& InP4Password, const FString& InP4ExecutablePath, FString& OutResults, FString& OutErrors, int32& OutReturnCode)
 {
-    FString P4Path = GetP4ExecutablePath();
+    FString P4Path = GetP4ExecutablePath(InP4ExecutablePath);
+    UE_LOG(LogP4CommandLine, Log, TEXT("P4CommandLine: Using p4 executable: %s"), *P4Path);
     if (P4Path.IsEmpty())
     {
-        OutErrors = TEXT("p4 executable not found in PATH");
+        OutErrors = TEXT("p4 executable not found. Please install p4 or set P4 Executable Path in Project Settings > Plugins > P4 Command Line Source Control.");
         OutReturnCode = -1;
         return false;
     }
@@ -260,6 +262,7 @@ bool FP4CommandLineSourceControlUtils::RunP4Command(const FString& InCommand, co
     }
     
     FString FullParameters = FString::Printf(TEXT("%s%s %s"), *CredentialsPrefix, *InCommand, *InParameters);
+    UE_LOG(LogP4CommandLine, Log, TEXT("P4CommandLine: Executing: %s %s"), *P4Path, *FullParameters);
     
     void* ReadPipe = nullptr;
     void* WritePipe = nullptr;
@@ -281,8 +284,9 @@ bool FP4CommandLineSourceControlUtils::RunP4Command(const FString& InCommand, co
     if (!ProcessHandle.IsValid())
     {
         FPlatformProcess::ClosePipe(ReadPipe, WritePipe);
-        OutErrors = FString::Printf(TEXT("Failed to start p4 process: %s"), *FullParameters);
+        OutErrors = FString::Printf(TEXT("Failed to start p4 process: %s %s"), *P4Path, *FullParameters);
         OutReturnCode = -1;
+        UE_LOG(LogP4CommandLine, Error, TEXT("P4CommandLine: %s"), *OutErrors);
         return false;
     }
     
@@ -295,6 +299,8 @@ bool FP4CommandLineSourceControlUtils::RunP4Command(const FString& InCommand, co
     FPlatformProcess::CloseProc(ProcessHandle);
     FPlatformProcess::ClosePipe(ReadPipe, WritePipe);
     
+    UE_LOG(LogP4CommandLine, Log, TEXT("P4CommandLine: ReturnCode=%d, Results=%s, Errors=%s"), OutReturnCode, *OutResults, *OutErrors);
+    
     if (OutReturnCode != 0)
     {
         OutErrors = OutResults;
@@ -304,27 +310,53 @@ bool FP4CommandLineSourceControlUtils::RunP4Command(const FString& InCommand, co
     return OutReturnCode == 0;
 }
 
-FString FP4CommandLineSourceControlUtils::GetP4ExecutablePath()
+FString FP4CommandLineSourceControlUtils::GetP4ExecutablePath(const FString& InConfiguredPath)
 {
-    FString P4Path = TEXT("p4");
+    // 1. Prefer user-configured path
+    if (!InConfiguredPath.IsEmpty() && FPaths::FileExists(InConfiguredPath))
+    {
+        UE_LOG(LogP4CommandLine, Log, TEXT("P4CommandLine: Using configured p4 path: %s"), *InConfiguredPath);
+        return InConfiguredPath;
+    }
     
-    // Try to find p4 in PATH
-    #if PLATFORM_WINDOWS
-    P4Path = TEXT("p4.exe");
-    #endif
-    
-    // Check if p4 is available by running "which p4" on Unix or "where p4" on Windows
+    // 2. Try to find p4 in PATH via which
     #if PLATFORM_UNIX || PLATFORM_MAC
     FString Results, Errors;
     int32 ReturnCode = 0;
     FPlatformProcess::ExecProcess(TEXT("/bin/sh"), TEXT("-c 'which p4'"), &ReturnCode, &Results, &Errors);
     if (ReturnCode == 0)
     {
-        P4Path = Results.TrimStartAndEnd();
+        FString Path = Results.TrimStartAndEnd();
+        if (FPaths::FileExists(Path))
+        {
+            UE_LOG(LogP4CommandLine, Log, TEXT("P4CommandLine: Found p4 via which: %s"), *Path);
+            return Path;
+        }
     }
     #endif
     
-    return P4Path;
+    // 3. Search common installation paths
+    const TArray<FString> CommonPaths = {
+        TEXT("/usr/local/bin/p4"),
+        TEXT("/opt/homebrew/bin/p4"),
+        TEXT("/usr/bin/p4"),
+        TEXT("/bin/p4"),
+        TEXT("/opt/local/bin/p4"),
+        TEXT("/Applications/p4v.app/Contents/MacOS/p4")
+    };
+    
+    for (const FString& Path : CommonPaths)
+    {
+        if (FPaths::FileExists(Path))
+        {
+            UE_LOG(LogP4CommandLine, Log, TEXT("P4CommandLine: Found p4 at common path: %s"), *Path);
+            return Path;
+        }
+    }
+    
+    // 4. Fallback - let the OS resolve it
+    UE_LOG(LogP4CommandLine, Warning, TEXT("P4CommandLine: Could not locate p4 executable. Tried 'which p4' and common paths. Falling back to 'p4' and hoping it's in PATH."));
+    return TEXT("p4");
 }
 
 FString FP4CommandLineSourceControlUtils::SanitizeFilename(const FString& InFilename)

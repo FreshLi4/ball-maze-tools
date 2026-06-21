@@ -13,8 +13,8 @@ public:
     static bool ParseInfoResult(const FString& InResults, FString& OutUserName, FString& OutClientName, FString& OutServerAddress);
 
     static bool RunP4Command(const FString& InCommand, const FString& InParameters, FString& OutResults, FString& OutErrors, int32& OutReturnCode);
-    static bool RunP4Command(const FString& InCommand, const FString& InParameters, const FString& InP4Port, const FString& InP4User, const FString& InP4Client, const FString& InP4Password, FString& OutResults, FString& OutErrors, int32& OutReturnCode);
-    static FString GetP4ExecutablePath();
+    static bool RunP4Command(const FString& InCommand, const FString& InParameters, const FString& InP4Port, const FString& InP4User, const FString& InP4Client, const FString& InP4Password, const FString& InP4ExecutablePath, FString& OutResults, FString& OutErrors, int32& OutReturnCode);
+    static FString GetP4ExecutablePath(const FString& InConfiguredPath = FString());
 
     static FString SanitizeFilename(const FString& InFilename);
     static FString GetDepotPath(const FString& InLocalFilename);

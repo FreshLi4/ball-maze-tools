@@ -1,0 +1,17 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Modules/ModuleInterface.h"
+#include "Modules/ModuleManager.h"
+
+class ISourceControlProvider;
+
+class FP4CommandLineSourceControlModule : public IModuleInterface
+{
+public:
+    virtual void StartupModule() override;
+    virtual void ShutdownModule() override;
+
+private:
+    TSharedPtr<ISourceControlProvider> SourceControlProvider;
+};

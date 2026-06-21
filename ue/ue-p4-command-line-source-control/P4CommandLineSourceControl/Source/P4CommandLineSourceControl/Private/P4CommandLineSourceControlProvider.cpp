@@ -3,15 +3,15 @@
 #include "P4CommandLineSourceControlUtils.h"
 #include "P4CommandLineSourceControlSettings.h"
 #include "SourceControlModule.h"
-#include "SourceControlHelpers.h"
 #include "SourceControlOperations.h"
 #include "Misc/Paths.h"
-#include "Misc/FeedbackContext.h"
+#include "Widgets/Text/STextBlock.h"
 
-#define LOCTEXT_NAMESPACE "P4CommandLineSourceControl"
+#define LOCTEXT_NAMESPACE "P4CommandLineSourceControl.Provider"
 
 FP4CommandLineSourceControlProvider::FP4CommandLineSourceControlProvider()
-    : ProviderName(FName("P4CommandLine"))
+    : bSourceControlAvailable(false)
+    , ProviderName(FName("P4CommandLine"))
 {
 }
 
@@ -26,38 +26,7 @@ void FP4CommandLineSourceControlProvider::Init(bool bForceConnection)
 void FP4CommandLineSourceControlProvider::Close()
 {
     bSourceControlAvailable = false;
-    CachedStates.Empty();
-}
-
-bool FP4CommandLineSourceControlProvider::IsAvailable() const
-{
-    return bSourceControlAvailable;
-}
-
-bool FP4CommandLineSourceControlProvider::IsEnabled() const
-{
-    return bSourceControlAvailable;
-}
-
-bool FP4CommandLineSourceControlProvider::IsAuthenticated() const
-{
-    FString Results, Errors;
-    int32 ReturnCode = 0;
-    if (FP4CommandLineSourceControlUtils::RunP4Command(TEXT("info"), TEXT(""), Results, Errors, ReturnCode))
-    {
-        return ReturnCode == 0;
-    }
-    return false;
-}
-
-const FName& FP4CommandLineSourceControlProvider::GetName() const
-{
-    return ProviderName;
-}
-
-FText FP4CommandLineSourceControlProvider::GetDisplayName() const
-{
-    return LOCTEXT("P4CommandLineDisplayName", "Perforce CLI");
+    StateCache.Empty();
 }
 
 FText FP4CommandLineSourceControlProvider::GetStatusText() const
@@ -69,40 +38,96 @@ FText FP4CommandLineSourceControlProvider::GetStatusText() const
     return LOCTEXT("P4CommandLineUnavailable", "Not connected to Perforce (CLI)");
 }
 
-bool FP4CommandLineSourceControlProvider::LearnMore(TArray<FString>& OutInfo) const
+TMap<ISourceControlProvider::EStatus, FString> FP4CommandLineSourceControlProvider::GetStatus() const
 {
-    OutInfo.Add(TEXT("Perforce CLI Source Control Provider"));
-    OutInfo.Add(TEXT("Uses the p4 command-line tool instead of libclient to avoid ABI crashes on macOS."));
-    OutInfo.Add(TEXT("Requires p4 to be installed and available in the system PATH."));
-    return true;
+    TMap<EStatus, FString> Status;
+    Status.Add(EStatus::Enabled, IsEnabled() ? TEXT("Enabled") : TEXT("Disabled"));
+    Status.Add(EStatus::Connected, IsAvailable() ? TEXT("Connected") : TEXT("Disconnected"));
+    return Status;
 }
 
-bool FP4CommandLineSourceControlProvider::Login(const FString& InUsername, const FString& InPassword, const FSourceControlLoginClosed& InOnSourceControlLoginClosed)
+bool FP4CommandLineSourceControlProvider::IsEnabled() const
 {
-    FString Parameters = FString::Printf(TEXT("-u %s -P %s login"), *InUsername, *InPassword);
-    FString Results, Errors;
-    int32 ReturnCode = 0;
-    bool bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("login"), Parameters, Results, Errors, ReturnCode);
-    if (bSuccess && ReturnCode == 0)
+    return bSourceControlAvailable;
+}
+
+bool FP4CommandLineSourceControlProvider::IsAvailable() const
+{
+    return bSourceControlAvailable;
+}
+
+const FName& FP4CommandLineSourceControlProvider::GetName() const
+{
+    return ProviderName;
+}
+
+bool FP4CommandLineSourceControlProvider::QueryStateBranchConfig(const FString& ConfigSrc, const FString& ConfigDest)
+{
+    return false;
+}
+
+void FP4CommandLineSourceControlProvider::RegisterStateBranches(const TArray<FString>& BranchNames, const FString& ContentRoot)
+{
+}
+
+int32 FP4CommandLineSourceControlProvider::GetStateBranchIndex(const FString& InBranchName) const
+{
+    return INDEX_NONE;
+}
+
+ECommandResult::Type FP4CommandLineSourceControlProvider::GetState(const TArray<FString>& InFiles, TArray<FSourceControlStateRef>& OutState, EStateCacheUsage::Type InStateCacheUsage)
+{
+    if (InStateCacheUsage == EStateCacheUsage::ForceUpdate)
     {
-        bSourceControlAvailable = true;
+        FString FileList;
+        for (const FString& File : InFiles)
+        {
+            FileList += FString::Printf(TEXT("%s "), *FP4CommandLineSourceControlUtils::SanitizeFilename(File));
+        }
+        FString Parameters = FString::Printf(TEXT("-T \"depotFile,clientFile,headRev,haveRev,action,otherOpen,otherOpen0,user\" %s"), *FileList);
+        FString Results, Errors;
+        int32 ReturnCode = 0;
+        bool bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("fstat"), Parameters, Results, Errors, ReturnCode);
+        if (bSuccess && ReturnCode == 0)
+        {
+            TArray<FSourceControlStateRef> NewStates;
+            FP4CommandLineSourceControlUtils::ParseStatusResult(Results, NewStates);
+            for (const FSourceControlStateRef& NewState : NewStates)
+            {
+                TSharedRef<FP4CommandLineSourceControlState> P4State = StaticCastSharedRef<FP4CommandLineSourceControlState>(NewState);
+                StateCache.Add(P4State->GetFilename(), P4State);
+            }
+            OnSourceControlStateChanged.Broadcast();
+        }
     }
-    return bSuccess && ReturnCode == 0;
+
+    for (const FString& File : InFiles)
+    {
+        TSharedRef<FP4CommandLineSourceControlState>* State = StateCache.Find(File);
+        if (State)
+        {
+            OutState.Add(*State);
+        }
+        else
+        {
+            TSharedRef<FP4CommandLineSourceControlState> NewState = MakeShared<FP4CommandLineSourceControlState>(File);
+            NewState->Update(TEXT(""), 0, 0, false, TEXT(""));
+            OutState.Add(NewState);
+        }
+    }
+
+    return ECommandResult::Succeeded;
 }
 
-bool FP4CommandLineSourceControlProvider::Logout()
+ECommandResult::Type FP4CommandLineSourceControlProvider::GetState(const TArray<FSourceControlChangelistRef>& InChangelists, TArray<FSourceControlChangelistStateRef>& OutState, EStateCacheUsage::Type InStateCacheUsage)
 {
-    FString Results, Errors;
-    int32 ReturnCode = 0;
-    FP4CommandLineSourceControlUtils::RunP4Command(TEXT("logout"), TEXT(""), Results, Errors, ReturnCode);
-    return ReturnCode == 0;
+    return ECommandResult::Failed;
 }
 
-const TArray<FSourceControlStateRef>& FP4CommandLineSourceControlProvider::GetCachedStateByPredicate(TFunctionRef<bool(const FSourceControlStateRef&)> Predicate) const
+TArray<FSourceControlStateRef> FP4CommandLineSourceControlProvider::GetCachedStateByPredicate(TFunctionRef<bool(const FSourceControlStateRef&)> Predicate) const
 {
-    static TArray<FSourceControlStateRef> FilteredStates;
-    FilteredStates.Empty();
-    for (const auto& Pair : CachedStates)
+    TArray<FSourceControlStateRef> FilteredStates;
+    for (const auto& Pair : StateCache)
     {
         if (Predicate(Pair.Value))
         {
@@ -112,387 +137,211 @@ const TArray<FSourceControlStateRef>& FP4CommandLineSourceControlProvider::GetCa
     return FilteredStates;
 }
 
-FSourceControlStatePtr FP4CommandLineSourceControlProvider::GetState(const FString& Filename, const FName& InBranch) const
+FDelegateHandle FP4CommandLineSourceControlProvider::RegisterSourceControlStateChanged_Handle(const FSourceControlStateChanged::FDelegate& SourceControlStateChanged)
 {
-    const FSourceControlStateRef* State = CachedStates.Find(Filename);
-    if (State)
-    {
-        return *State;
-    }
-    return nullptr;
+    return OnSourceControlStateChanged.Add(SourceControlStateChanged);
 }
 
-TArray<FSourceControlStateRef> FP4CommandLineSourceControlProvider::GetState(const TArray<FString>& Filenames, const FName& InBranch)
+void FP4CommandLineSourceControlProvider::UnregisterSourceControlStateChanged_Handle(FDelegateHandle Handle)
 {
-    TArray<FSourceControlStateRef> States;
-    for (const FString& Filename : Filenames)
-    {
-        FSourceControlStatePtr State = GetState(Filename, InBranch);
-        if (State.IsValid())
-        {
-            States.Add(State.ToSharedRef());
-        }
-    }
-    return States;
+    OnSourceControlStateChanged.Remove(Handle);
 }
 
-void FP4CommandLineSourceControlProvider::UpdateState(const TArray<FSourceControlStateRef>& InSourceControlStates)
-{
-    for (const FSourceControlStateRef& State : InSourceControlStates)
-    {
-        TSharedPtr<FP4CommandLineSourceControlState> P4State = StaticCastSharedPtr<FP4CommandLineSourceControlState>(State);
-        if (P4State.IsValid())
-        {
-            CachedStates.Add(P4State->GetLocalFilename(), P4State.ToSharedRef());
-        }
-    }
-}
-
-bool FP4CommandLineSourceControlProvider::CanCancelOperation() const
-{
-    return false;
-}
-
-void FP4CommandLineSourceControlProvider::CancelOperation()
-{
-}
-
-bool FP4CommandLineSourceControlProvider::IsOperationValid(const FSourceControlOperationRef& InOperation) const
-{
-    return true;
-}
-
-TSharedRef<class ISourceControlOperation, ESPMode::ThreadSafe> FP4CommandLineSourceControlProvider::CreateOperation(const FName& InOperationName)
-{
-    if (InOperationName == FCheckOut::GetName())
-    {
-        return MakeShareable(new FCheckOut);
-    }
-    else if (InOperationName == FRevert::GetName())
-    {
-        return MakeShareable(new FRevert);
-    }
-    else if (InOperationName == FAdd::GetName())
-    {
-        return MakeShareable(new FAdd);
-    }
-    else if (InOperationName == FDelete::GetName())
-    {
-        return MakeShareable(new FDelete);
-    }
-    else if (InOperationName == FMove::GetName())
-    {
-        return MakeShareable(new FMove);
-    }
-    else if (InOperationName == FSync::GetName())
-    {
-        return MakeShareable(new FSync);
-    }
-    else if (InOperationName == FUpdateStatus::GetName())
-    {
-        return MakeShareable(new FUpdateStatus);
-    }
-    else if (InOperationName == FCheckIn::GetName())
-    {
-        return MakeShareable(new FCheckIn);
-    }
-    else if (InOperationName == FHistory::GetName())
-    {
-        return MakeShareable(new FHistory);
-    }
-    else if (InOperationName == FAnnotate::GetName())
-    {
-        return MakeShareable(new FAnnotate);
-    }
-
-    return MakeShareable(new FUpdateStatus);
-}
-
-bool FP4CommandLineSourceControlProvider::CanExecuteOperation(const FName& InOperationName) const
-{
-    return true;
-}
-
-bool FP4CommandLineSourceControlProvider::Execute(const FSourceControlOperationRef& InOperation, const FSourceControlOperationComplete& InOperationCompleteDelegate, EConcurrency::Type InConcurrency, const FName& InBranch)
+ECommandResult::Type FP4CommandLineSourceControlProvider::Execute(const FSourceControlOperationRef& InOperation, FSourceControlChangelistPtr InChangelist, const TArray<FString>& InFiles, EConcurrency::Type InConcurrency, const FSourceControlOperationComplete& InOperationCompleteDelegate)
 {
     if (!IsEnabled())
     {
         InOperationCompleteDelegate.ExecuteIfBound(InOperation, ECommandResult::Failed);
-        return false;
-    }
-
-    FSourceControlResultInfo ResultInfo;
-    InOperation->AppendResultInfo(ResultInfo);
-
-    TArray<FString> Files;
-    if (FUpdateStatus* UpdateStatus = InOperation->GetOperation<FUpdateStatus>())
-    {
-        Files = UpdateStatus->GetFiles();
-    }
-    else if (FCheckOut* CheckOut = InOperation->GetOperation<FCheckOut>())
-    {
-        Files = CheckOut->GetFiles();
-    }
-    else if (FRevert* Revert = InOperation->GetOperation<FRevert>())
-    {
-        Files = Revert->GetFiles();
-    }
-    else if (FAdd* Add = InOperation->GetOperation<FAdd>())
-    {
-        Files = Add->GetFiles();
-    }
-    else if (FDelete* Delete = InOperation->GetOperation<FDelete>())
-    {
-        Files = Delete->GetFiles();
-    }
-    else if (FMove* Move = InOperation->GetOperation<FMove>())
-    {
-        Files = Move->GetFiles();
-    }
-    else if (FSync* Sync = InOperation->GetOperation<FSync>())
-    {
-        Files = Sync->GetFiles();
-    }
-    else if (FCheckIn* CheckIn = InOperation->GetOperation<FCheckIn>())
-    {
-        Files = CheckIn->GetFiles();
-    }
-    else if (FHistory* History = InOperation->GetOperation<FHistory>())
-    {
-        Files = History->GetFiles();
-    }
-    else if (FAnnotate* Annotate = InOperation->GetOperation<FAnnotate>())
-    {
-        Files = Annotate->GetFiles();
+        return ECommandResult::Failed;
     }
 
     bool bSuccess = false;
+    FString Results, Errors;
+    int32 ReturnCode = 0;
 
     if (InOperation->GetName() == FUpdateStatus::GetName())
     {
         FString FileList;
-        for (const FString& File : Files)
+        for (const FString& File : InFiles)
         {
-            FileList += FString::Printf(TEXT("%s\n"), *FP4CommandLineSourceControlUtils::SanitizeFilename(File));
+            FileList += FString::Printf(TEXT("%s "), *FP4CommandLineSourceControlUtils::SanitizeFilename(File));
         }
-
-        FString Parameters = FString::Printf(TEXT("-x - fstat -T \"depotFile,clientFile,headRev,haveRev,action,otherOpen,otherOpen0,user\""));
-        FString Results, Errors;
-        int32 ReturnCode = 0;
-
+        FString Parameters = FString::Printf(TEXT("-T \"depotFile,clientFile,headRev,haveRev,action,otherOpen,otherOpen0,user\" %s"), *FileList);
         bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("fstat"), Parameters, Results, Errors, ReturnCode);
         if (bSuccess && ReturnCode == 0)
         {
             TArray<FSourceControlStateRef> NewStates;
             FP4CommandLineSourceControlUtils::ParseStatusResult(Results, NewStates);
-            UpdateState(NewStates);
+            for (const FSourceControlStateRef& NewState : NewStates)
+            {
+                TSharedRef<FP4CommandLineSourceControlState> P4State = StaticCastSharedRef<FP4CommandLineSourceControlState>(NewState);
+                StateCache.Add(P4State->GetFilename(), P4State);
+            }
+            OnSourceControlStateChanged.Broadcast();
         }
     }
     else if (InOperation->GetName() == FCheckOut::GetName())
     {
         FString FileList;
-        for (const FString& File : Files)
+        for (const FString& File : InFiles)
         {
             FileList += FString::Printf(TEXT("%s "), *FP4CommandLineSourceControlUtils::SanitizeFilename(File));
         }
-        FString Results, Errors;
-        int32 ReturnCode = 0;
         bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("edit"), FileList, Results, Errors, ReturnCode);
     }
     else if (InOperation->GetName() == FRevert::GetName())
     {
         FString FileList;
-        for (const FString& File : Files)
+        for (const FString& File : InFiles)
         {
             FileList += FString::Printf(TEXT("%s "), *FP4CommandLineSourceControlUtils::SanitizeFilename(File));
         }
-        FString Results, Errors;
-        int32 ReturnCode = 0;
-        bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("revert"), TEXT("-k ") + FileList, Results, Errors, ReturnCode);
+        bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("revert"), FString::Printf(TEXT("-k %s"), *FileList), Results, Errors, ReturnCode);
     }
     else if (InOperation->GetName() == FAdd::GetName())
     {
         FString FileList;
-        for (const FString& File : Files)
+        for (const FString& File : InFiles)
         {
             FileList += FString::Printf(TEXT("%s "), *FP4CommandLineSourceControlUtils::SanitizeFilename(File));
         }
-        FString Results, Errors;
-        int32 ReturnCode = 0;
         bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("add"), FileList, Results, Errors, ReturnCode);
     }
     else if (InOperation->GetName() == FDelete::GetName())
     {
         FString FileList;
-        for (const FString& File : Files)
+        for (const FString& File : InFiles)
         {
             FileList += FString::Printf(TEXT("%s "), *FP4CommandLineSourceControlUtils::SanitizeFilename(File));
         }
-        FString Results, Errors;
-        int32 ReturnCode = 0;
         bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("delete"), FileList, Results, Errors, ReturnCode);
     }
     else if (InOperation->GetName() == FMove::GetName())
     {
-        if (Files.Num() >= 2)
+        if (InFiles.Num() >= 2)
         {
-            FString Source = FP4CommandLineSourceControlUtils::SanitizeFilename(Files[0]);
-            FString Destination = FP4CommandLineSourceControlUtils::SanitizeFilename(Files[1]);
-            FString Results, Errors;
-            int32 ReturnCode = 0;
+            FString Source = FP4CommandLineSourceControlUtils::SanitizeFilename(InFiles[0]);
+            FString Destination = FP4CommandLineSourceControlUtils::SanitizeFilename(InFiles[1]);
             bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("move"), FString::Printf(TEXT("%s %s"), *Source, *Destination), Results, Errors, ReturnCode);
         }
     }
     else if (InOperation->GetName() == FSync::GetName())
     {
         FString FileList;
-        for (const FString& File : Files)
+        for (const FString& File : InFiles)
         {
             FileList += FString::Printf(TEXT("%s "), *FP4CommandLineSourceControlUtils::SanitizeFilename(File));
         }
-        FString Results, Errors;
-        int32 ReturnCode = 0;
         bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("sync"), FileList, Results, Errors, ReturnCode);
     }
     else if (InOperation->GetName() == FCheckIn::GetName())
     {
         FCheckIn* CheckIn = InOperation->GetOperation<FCheckIn>();
-        FString Description = CheckIn->GetDescription().ToString();
-        FString FileList;
-        for (const FString& File : Files)
+        if (CheckIn)
         {
-            FileList += FString::Printf(TEXT("%s "), *FP4CommandLineSourceControlUtils::SanitizeFilename(File));
+            FString Description = CheckIn->GetDescription().ToString();
+            FString FileList;
+            for (const FString& File : InFiles)
+            {
+                FileList += FString::Printf(TEXT("%s "), *FP4CommandLineSourceControlUtils::SanitizeFilename(File));
+            }
+            FString Parameters = FString::Printf(TEXT("-d \"%s\" %s"), *Description, *FileList);
+            bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("submit"), Parameters, Results, Errors, ReturnCode);
         }
-        FString Results, Errors;
-        int32 ReturnCode = 0;
-        FString Parameters = FString::Printf(TEXT("-d \"%s\" %s"), *Description, *FileList);
-        bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("submit"), Parameters, Results, Errors, ReturnCode);
     }
     else if (InOperation->GetName() == FHistory::GetName())
     {
-        FString FileList;
-        for (const FString& File : Files)
-        {
-            FileList += FString::Printf(TEXT("%s "), *FP4CommandLineSourceControlUtils::SanitizeFilename(File));
-        }
-        FString Results, Errors;
-        int32 ReturnCode = 0;
-        bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("filelog"), TEXT("-l ") + FileList, Results, Errors, ReturnCode);
-        if (bSuccess && ReturnCode == 0)
-        {
-            TArray<FSourceControlRevisionRef> Revisions;
-            FP4CommandLineSourceControlUtils::ParseFileLogResult(Results, Revisions);
-        }
+        bSuccess = true; // Handled through GetState
     }
     else if (InOperation->GetName() == FAnnotate::GetName())
     {
-        FString FileList;
-        for (const FString& File : Files)
-        {
-            FileList += FString::Printf(TEXT("%s "), *FP4CommandLineSourceControlUtils::SanitizeFilename(File));
-        }
-        FString Results, Errors;
-        int32 ReturnCode = 0;
-        bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("annotate"), FileList, Results, Errors, ReturnCode);
+        bSuccess = true; // Handled through GetState
     }
 
     ECommandResult::Type Result = bSuccess ? ECommandResult::Succeeded : ECommandResult::Failed;
     InOperationCompleteDelegate.ExecuteIfBound(InOperation, Result);
-
-    return bSuccess;
+    return Result;
 }
 
-bool FP4CommandLineSourceControlProvider::CanUpdateStatus() const
+bool FP4CommandLineSourceControlProvider::CanExecuteOperation(const FSourceControlOperationRef& InOperation) const
 {
     return true;
 }
 
-bool FP4CommandLineSourceControlProvider::UpdateStatus()
+bool FP4CommandLineSourceControlProvider::CanCancelOperation(const FSourceControlOperationRef& InOperation) const
+{
+    return false;
+}
+
+void FP4CommandLineSourceControlProvider::CancelOperation(const FSourceControlOperationRef& InOperation)
+{
+}
+
+bool FP4CommandLineSourceControlProvider::UsesLocalReadOnlyState() const
+{
+    return true; // Perforce uses read-only flags
+}
+
+bool FP4CommandLineSourceControlProvider::UsesChangelists() const
+{
+    return true; // Perforce supports changelists
+}
+
+bool FP4CommandLineSourceControlProvider::UsesUncontrolledChangelists() const
+{
+    return false;
+}
+
+bool FP4CommandLineSourceControlProvider::UsesCheckout() const
+{
+    return true; // Perforce requires checkout
+}
+
+bool FP4CommandLineSourceControlProvider::UsesFileRevisions() const
 {
     return true;
 }
 
-bool FP4CommandLineSourceControlProvider::CanDiffAgainstBase(const FString& InFilename) const
+bool FP4CommandLineSourceControlProvider::UsesSnapshots() const
+{
+    return false;
+}
+
+bool FP4CommandLineSourceControlProvider::AllowsDiffAgainstDepot() const
 {
     return true;
 }
 
-bool FP4CommandLineSourceControlProvider::CanDiffAgainstLocal(const FString& InFilename) const
+TOptional<bool> FP4CommandLineSourceControlProvider::IsAtLatestRevision() const
 {
-    return true;
+    return TOptional<bool>(true);
 }
 
-bool FP4CommandLineSourceControlProvider::DiffAgainstBase(const FString& InFilename) const
+TOptional<int> FP4CommandLineSourceControlProvider::GetNumLocalChanges() const
 {
-    FString Results, Errors;
-    int32 ReturnCode = 0;
-    FString Parameters = FString::Printf(TEXT("-f %s"), *FP4CommandLineSourceControlUtils::SanitizeFilename(InFilename));
-    FP4CommandLineSourceControlUtils::RunP4Command(TEXT("diff"), Parameters, Results, Errors, ReturnCode);
-    return ReturnCode == 0;
+    return TOptional<int>(0);
 }
 
-bool FP4CommandLineSourceControlProvider::DiffAgainstLocal(const FString& InFilename) const
+void FP4CommandLineSourceControlProvider::Tick()
 {
-    FString Results, Errors;
-    int32 ReturnCode = 0;
-    FString Parameters = FString::Printf(TEXT("%s"), *FP4CommandLineSourceControlUtils::SanitizeFilename(InFilename));
-    FP4CommandLineSourceControlUtils::RunP4Command(TEXT("diff"), Parameters, Results, Errors, ReturnCode);
-    return ReturnCode == 0;
 }
 
-bool FP4CommandLineSourceControlProvider::GetHistory(const FString& InFilename, TArray<FSourceControlRevisionRef>& OutHistory)
+TArray<TSharedRef<class ISourceControlLabel>> FP4CommandLineSourceControlProvider::GetLabels(const FString& InMatchingSpec) const
 {
-    FString Results, Errors;
-    int32 ReturnCode = 0;
-    FString Parameters = FString::Printf(TEXT("-l %s"), *FP4CommandLineSourceControlUtils::SanitizeFilename(InFilename));
-    bool bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("filelog"), Parameters, Results, Errors, ReturnCode);
-    if (bSuccess && ReturnCode == 0)
-    {
-        FP4CommandLineSourceControlUtils::ParseFileLogResult(Results, OutHistory);
-    }
-    return bSuccess && ReturnCode == 0;
+    return TArray<TSharedRef<class ISourceControlLabel>>();
 }
 
-bool FP4CommandLineSourceControlProvider::CanUpdateHistory() const
+TArray<FSourceControlChangelistRef> FP4CommandLineSourceControlProvider::GetChangelists(EStateCacheUsage::Type InStateCacheUsage)
 {
-    return true;
+    return TArray<FSourceControlChangelistRef>();
 }
 
-bool FP4CommandLineSourceControlProvider::UpdateHistory()
+#if SOURCE_CONTROL_WITH_SLATE
+TSharedRef<class SWidget> FP4CommandLineSourceControlProvider::MakeSettingsWidget() const
 {
-    return true;
+    return SNew(STextBlock).Text(LOCTEXT("SettingsPlaceholder", "P4 CLI Settings (configure via Project Settings or .p4config)"));
 }
-
-bool FP4CommandLineSourceControlProvider::GetWorkspaces(TArray<FString>& OutWorkspaces)
-{
-    FString Results, Errors;
-    int32 ReturnCode = 0;
-    bool bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("clients"), TEXT(""), Results, Errors, ReturnCode);
-    if (bSuccess && ReturnCode == 0)
-    {
-        TArray<FString> Lines;
-        Results.ParseIntoArray(Lines, TEXT("\n"), true);
-        for (const FString& Line : Lines)
-        {
-            FString Trimmed = Line.TrimStartAndEnd();
-            if (Trimmed.StartsWith(TEXT("Client ")))
-            {
-                FString ClientName = Trimmed.Replace(TEXT("Client "), TEXT("")).TrimStartAndEnd();
-                OutWorkspaces.Add(ClientName);
-            }
-        }
-    }
-    return bSuccess && ReturnCode == 0;
-}
-
-bool FP4CommandLineSourceControlProvider::SwitchWorkspace(const FString& InWorkspaceName)
-{
-    FString Results, Errors;
-    int32 ReturnCode = 0;
-    FString Parameters = FString::Printf(TEXT("%s"), *InWorkspaceName);
-    bool bSuccess = FP4CommandLineSourceControlUtils::RunP4Command(TEXT("client"), Parameters, Results, Errors, ReturnCode);
-    return bSuccess && ReturnCode == 0;
-}
+#endif
 
 bool FP4CommandLineSourceControlProvider::CheckP4Availability()
 {
@@ -502,19 +351,16 @@ bool FP4CommandLineSourceControlProvider::CheckP4Availability()
     return bSourceControlAvailable;
 }
 
-bool FP4CommandLineSourceControlProvider::ExecuteSynchronousCommand(FP4CommandLineSourceControlCommand& InCommand, const FText& TaskName)
+TSharedRef<FP4CommandLineSourceControlState> FP4CommandLineSourceControlProvider::GetStateInternal(const FString& Filename)
 {
-    return InCommand.RunCommand();
-}
-
-bool FP4CommandLineSourceControlProvider::ExecuteAsynchronousCommand(FP4CommandLineSourceControlCommand& InCommand)
-{
-    return InCommand.RunCommand();
-}
-
-void FP4CommandLineSourceControlProvider::RegisterWorker(const FName& InName, FGetP4SourceControlWorker InDelegate)
-{
-    WorkersMap.Add(InName, InDelegate);
+    TSharedRef<FP4CommandLineSourceControlState>* State = StateCache.Find(Filename);
+    if (State)
+    {
+        return *State;
+    }
+    TSharedRef<FP4CommandLineSourceControlState> NewState = MakeShared<FP4CommandLineSourceControlState>(Filename);
+    StateCache.Add(Filename, NewState);
+    return NewState;
 }
 
 #undef LOCTEXT_NAMESPACE

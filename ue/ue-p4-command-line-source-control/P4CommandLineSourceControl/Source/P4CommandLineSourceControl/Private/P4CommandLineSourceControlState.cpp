@@ -1,363 +1,275 @@
 #include "P4CommandLineSourceControlState.h"
-#include "Misc/Paths.h"
+#include "Textures/SlateIcon.h"
+#include "RevisionControlStyle/RevisionControlStyle.h"
 
-#define LOCTEXT_NAMESPACE "P4CommandLineSourceControl"
+#define LOCTEXT_NAMESPACE "P4CommandLineSourceControl.State"
 
-FName FP4CommandLineSourceControlState::GetStateIcon() const
+int32 FP4CommandLineSourceControlState::GetHistorySize() const
 {
-    if (IsCheckedOut())
-    {
-        return FName("SourceControl.CheckedOut");
-    }
-    else if (IsAdded())
-    {
-        return FName("SourceControl.Added");
-    }
-    else if (IsDeleted())
-    {
-        return FName("SourceControl.Deleted");
-    }
-    else if (IsCheckedOutOther())
-    {
-        return FName("SourceControl.CheckedOutOther");
-    }
-    else if (IsConflicted())
-    {
-        return FName("SourceControl.Conflicted");
-    }
-    else if (IsNew())
-    {
-        return FName("SourceControl.NotInDepot");
-    }
-    else if (!IsCurrent())
-    {
-        return FName("SourceControl.NotAtHeadRevision");
-    }
-    else
-    {
-        return FName("SourceControl.CheckedOut");
-    }
+	return History.Num();
 }
 
-FText FP4CommandLineSourceControlState::GetStateText() const
+TSharedPtr<class ISourceControlRevision, ESPMode::ThreadSafe> FP4CommandLineSourceControlState::GetHistoryItem(int32 HistoryIndex) const
 {
-    if (IsCheckedOut())
-    {
-        return LOCTEXT("CheckedOut", "Checked Out");
-    }
-    else if (IsAdded())
-    {
-        return LOCTEXT("Added", "Added");
-    }
-    else if (IsDeleted())
-    {
-        return LOCTEXT("Deleted", "Marked for Delete");
-    }
-    else if (IsCheckedOutOther())
-    {
-        return LOCTEXT("CheckedOutOther", "Checked Out by Other");
-    }
-    else if (IsConflicted())
-    {
-        return LOCTEXT("Conflicted", "Conflicted");
-    }
-    else if (IsNew())
-    {
-        return LOCTEXT("New", "Not in Depot");
-    }
-    else if (!IsCurrent())
-    {
-        return LOCTEXT("NotCurrent", "Not at Head Revision");
-    }
-    else
-    {
-        return LOCTEXT("Current", "Current");
-    }
+	if (History.IsValidIndex(HistoryIndex))
+	{
+		return History[HistoryIndex];
+	}
+	return nullptr;
+}
+
+TSharedPtr<class ISourceControlRevision, ESPMode::ThreadSafe> FP4CommandLineSourceControlState::FindHistoryRevision(int32 RevisionNumber) const
+{
+	for (const auto& Revision : History)
+	{
+		if (Revision->GetRevisionNumber() == RevisionNumber)
+		{
+			return Revision;
+		}
+	}
+	return nullptr;
+}
+
+TSharedPtr<class ISourceControlRevision, ESPMode::ThreadSafe> FP4CommandLineSourceControlState::FindHistoryRevision(const FString& InRevision) const
+{
+	for (const auto& Revision : History)
+	{
+		if (Revision->GetRevision() == InRevision)
+		{
+			return Revision;
+		}
+	}
+	return nullptr;
+}
+
+TSharedPtr<class ISourceControlRevision, ESPMode::ThreadSafe> FP4CommandLineSourceControlState::GetCurrentRevision() const
+{
+	if (History.Num() > 0)
+	{
+		return History.Last();
+	}
+	return nullptr;
+}
+
+ISourceControlState::FResolveInfo FP4CommandLineSourceControlState::GetResolveInfo() const
+{
+	return ResolveInfo;
+}
+
+FSlateIcon FP4CommandLineSourceControlState::GetIcon() const
+{
+	if (IsCheckedOut())
+	{
+		return FSlateIcon(FRevisionControlStyleManager::GetStyleSetName(), "RevisionControl.CheckedOut");
+	}
+	else if (IsAdded())
+	{
+		return FSlateIcon(FRevisionControlStyleManager::GetStyleSetName(), "RevisionControl.OpenForAdd");
+	}
+	else if (IsDeleted())
+	{
+		return FSlateIcon(FRevisionControlStyleManager::GetStyleSetName(), "RevisionControl.MarkedForDelete");
+	}
+	else if (IsCheckedOutOther())
+	{
+		return FSlateIcon(FRevisionControlStyleManager::GetStyleSetName(), "RevisionControl.CheckedOutOther");
+	}
+	else if (IsConflicted())
+	{
+		return FSlateIcon(FRevisionControlStyleManager::GetStyleSetName(), "RevisionControl.Conflicted");
+	}
+	else if (!IsSourceControlled())
+	{
+		return FSlateIcon(FRevisionControlStyleManager::GetStyleSetName(), "RevisionControl.NotInDepot");
+	}
+	else if (!IsCurrent())
+	{
+		return FSlateIcon(FRevisionControlStyleManager::GetStyleSetName(), "RevisionControl.NotAtHeadRevision");
+	}
+	else
+	{
+		return FSlateIcon();
+	}
 }
 
 FText FP4CommandLineSourceControlState::GetDisplayName() const
 {
-    return FText::FromString(FPaths::GetCleanFilename(LocalFilename));
+	if (IsCheckedOut())
+	{
+		return LOCTEXT("CheckedOut", "Checked Out");
+	}
+	else if (IsAdded())
+	{
+		return LOCTEXT("Added", "Added");
+	}
+	else if (IsDeleted())
+	{
+		return LOCTEXT("Deleted", "Deleted");
+	}
+	else if (IsCheckedOutOther())
+	{
+		return LOCTEXT("CheckedOutOther", "Checked Out by Other");
+	}
+	else if (IsConflicted())
+	{
+		return LOCTEXT("Conflicted", "Conflicted");
+	}
+	else if (!IsSourceControlled())
+	{
+		return LOCTEXT("NotControlled", "Not Under Revision Control");
+	}
+	else if (!IsCurrent())
+	{
+		return LOCTEXT("NotCurrent", "Not at Head Revision");
+	}
+	else
+	{
+		return LOCTEXT("Current", "Current");
+	}
 }
 
-bool FP4CommandLineSourceControlState::IsCurrent() const
+FText FP4CommandLineSourceControlState::GetDisplayTooltip() const
 {
-    return HeadRevision == HaveRevision && HeadRevision > 0;
+	if (IsCheckedOut())
+	{
+		return LOCTEXT("CheckedOut_Tooltip", "Item is checked out for edit");
+	}
+	else if (IsAdded())
+	{
+		return LOCTEXT("Added_Tooltip", "Item is scheduled for addition");
+	}
+	else if (IsDeleted())
+	{
+		return LOCTEXT("Deleted_Tooltip", "Item is scheduled for deletion");
+	}
+	else if (IsCheckedOutOther())
+	{
+		if (!OtherUserCheckedOut.IsEmpty())
+		{
+			return FText::Format(LOCTEXT("CheckedOutOther_Tooltip", "Item is checked out by user {0}"), FText::FromString(OtherUserCheckedOut));
+		}
+		return LOCTEXT("CheckedOutOther_Tooltip", "Item is checked out by another user");
+	}
+	else if (IsConflicted())
+	{
+		return LOCTEXT("Conflicted_Tooltip", "The contents of the item conflict with updates received from the repository");
+	}
+	else if (!IsSourceControlled())
+	{
+		return LOCTEXT("NotControlled_Tooltip", "Item is not under version control");
+	}
+	else if (!IsCurrent())
+	{
+		return LOCTEXT("NotCurrent_Tooltip", "Item is not at the latest revision");
+	}
+	else
+	{
+		return LOCTEXT("Current_Tooltip", "There are no modifications");
+	}
 }
 
-bool FP4CommandLineSourceControlState::IsSourceControlled() const
+const FString& FP4CommandLineSourceControlState::GetFilename() const
 {
-    return !DepotFilename.IsEmpty();
+	return LocalFilename;
 }
 
-bool FP4CommandLineSourceControlState::IsAdded() const
+const FDateTime& FP4CommandLineSourceControlState::GetTimeStamp() const
 {
-    return Action == TEXT("add");
-}
-
-bool FP4CommandLineSourceControlState::IsDeleted() const
-{
-    return Action == TEXT("delete");
-}
-
-bool FP4CommandLineSourceControlState::IsCheckedOut() const
-{
-    return Action == TEXT("edit") || Action == TEXT("add") || Action == TEXT("delete") || Action == TEXT("branch") || Action == TEXT("integrate");
-}
-
-bool FP4CommandLineSourceControlState::IsCheckedOutOther(FString* OtherUserName) const
-{
-    if (bOtherOpen && OtherUserName)
-    {
-        *OtherUserName = OtherUserCheckedOut;
-    }
-    return bOtherOpen;
-}
-
-bool FP4CommandLineSourceControlState::IsModified() const
-{
-    return IsCheckedOut() || IsAdded() || IsDeleted();
-}
-
-bool FP4CommandLineSourceControlState::IsNew() const
-{
-    return !IsSourceControlled();
-}
-
-bool FP4CommandLineSourceControlState::CanAdd() const
-{
-    return !IsSourceControlled() && !IsAdded();
-}
-
-bool FP4CommandLineSourceControlState::CanDelete() const
-{
-    return IsSourceControlled() && !IsDeleted();
-}
-
-bool FP4CommandLineSourceControlState::CanCheckOut() const
-{
-    return IsSourceControlled() && !IsCheckedOut() && !IsCheckedOutOther();
-}
-
-bool FP4CommandLineSourceControlState::CanRevert() const
-{
-    return IsCheckedOut() || IsAdded() || IsDeleted();
+	return TimeStamp;
 }
 
 bool FP4CommandLineSourceControlState::CanCheckIn() const
 {
-    return IsCheckedOut() || IsAdded() || IsDeleted();
+	return IsCheckedOut() || IsAdded() || IsDeleted();
 }
 
-bool FP4CommandLineSourceControlState::CanDiffAgainstBase() const
+bool FP4CommandLineSourceControlState::CanCheckout() const
 {
-    return IsSourceControlled() && !IsNew();
+	return IsSourceControlled() && !IsCheckedOut() && !IsCheckedOutOther();
 }
 
-bool FP4CommandLineSourceControlState::CanDiffAgainstDepot() const
+bool FP4CommandLineSourceControlState::IsCheckedOut() const
 {
-    return IsSourceControlled() && !IsNew();
+	return Action == TEXT("edit") || Action == TEXT("add") || Action == TEXT("delete") || Action == TEXT("branch") || Action == TEXT("integrate");
 }
 
-bool FP4CommandLineSourceControlState::CanDiffAgainstLocal() const
+bool FP4CommandLineSourceControlState::IsCheckedOutOther(FString* Who) const
 {
-    return IsSourceControlled() && !IsNew();
+	if (bOtherOpen && Who)
+	{
+		*Who = OtherUserCheckedOut;
+	}
+	return bOtherOpen;
 }
 
-bool FP4CommandLineSourceControlState::CanHistory() const
+bool FP4CommandLineSourceControlState::IsCurrent() const
 {
-    return IsSourceControlled() && !IsNew();
+	return HeadRevision == HaveRevision && HeadRevision > 0;
 }
 
-bool FP4CommandLineSourceControlState::CanUpdateStatus() const
+bool FP4CommandLineSourceControlState::IsSourceControlled() const
 {
-    return true;
+	return !DepotFilename.IsEmpty();
 }
 
-bool FP4CommandLineSourceControlState::CanSync() const
+bool FP4CommandLineSourceControlState::IsAdded() const
 {
-    return IsSourceControlled() && !IsCurrent();
+	return Action == TEXT("add");
 }
 
-bool FP4CommandLineSourceControlState::CanLock() const
+bool FP4CommandLineSourceControlState::IsDeleted() const
 {
-    return false;
-}
-
-bool FP4CommandLineSourceControlState::CanUnlock() const
-{
-    return false;
-}
-
-bool FP4CommandLineSourceControlState::IsLocked() const
-{
-    return false;
-}
-
-bool FP4CommandLineSourceControlState::IsBinary() const
-{
-    return false;
-}
-
-bool FP4CommandLineSourceControlState::IsMoved() const
-{
-    return false;
-}
-
-bool FP4CommandLineSourceControlState::IsConflicted() const
-{
-    return false;
-}
-
-bool FP4CommandLineSourceControlState::IsHistorical() const
-{
-    return false;
-}
-
-bool FP4CommandLineSourceControlState::IsUnknown() const
-{
-    return false;
+	return Action == TEXT("delete");
 }
 
 bool FP4CommandLineSourceControlState::IsIgnored() const
 {
-    return false;
+	return false;
 }
 
-bool FP4CommandLineSourceControlState::CanDeleteLocal() const
+bool FP4CommandLineSourceControlState::CanEdit() const
 {
-    return true;
+	return IsSourceControlled() && !IsCheckedOutOther();
 }
 
-bool FP4CommandLineSourceControlState::CanRevertCheckedOut() const
+bool FP4CommandLineSourceControlState::CanDelete() const
 {
-    return CanRevert();
+	return IsSourceControlled() && !IsDeleted();
 }
 
-bool FP4CommandLineSourceControlState::CanRevertUnchanged() const
+bool FP4CommandLineSourceControlState::IsUnknown() const
 {
-    return CanRevert();
+	return false;
 }
 
-bool FP4CommandLineSourceControlState::CanRevertModified() const
+bool FP4CommandLineSourceControlState::IsModified() const
 {
-    return CanRevert();
+	return IsCheckedOut() || IsAdded() || IsDeleted();
 }
 
-bool FP4CommandLineSourceControlState::CanSubmit() const
+bool FP4CommandLineSourceControlState::CanAdd() const
 {
-    return CanCheckIn();
+	return !IsSourceControlled() && !IsAdded();
 }
 
-bool FP4CommandLineSourceControlState::CanDiffAgainstWorkspace() const
+bool FP4CommandLineSourceControlState::IsConflicted() const
 {
-    return CanDiffAgainstDepot();
+	return GetResolveInfo().IsValid();
 }
 
-bool FP4CommandLineSourceControlState::CanDiffAgainstPrevious() const
+bool FP4CommandLineSourceControlState::CanRevert() const
 {
-    return IsSourceControlled() && !IsNew() && HeadRevision > 1;
-}
-
-bool FP4CommandLineSourceControlState::CanDiffAgainstHead() const
-{
-    return CanDiffAgainstDepot();
-}
-
-bool FP4CommandLineSourceControlState::IsUsingLocalFileRevisions() const
-{
-    return false;
-}
-
-bool FP4CommandLineSourceControlState::CanPreview() const
-{
-    return false;
-}
-
-bool FP4CommandLineSourceControlState::CanAddToIgnore() const
-{
-    return false;
-}
-
-bool FP4CommandLineSourceControlState::CanRemoveFromIgnore() const
-{
-    return false;
-}
-
-bool FP4CommandLineSourceControlState::CanAddToChangelist() const
-{
-    return false;
-}
-
-bool FP4CommandLineSourceControlState::IsUncontrolledChange() const
-{
-    return false;
-}
-
-bool FP4CommandLineSourceControlState::IsUnchecked() const
-{
-    return false;
-}
-
-bool FP4CommandLineSourceControlState::IsForbidCheckout() const
-{
-    return false;
-}
-
-bool FP4CommandLineSourceControlState::IsSlowTask() const
-{
-    return false;
-}
-
-bool FP4CommandLineSourceControlState::IsRedirector() const
-{
-    return false;
-}
-
-bool FP4CommandLineSourceControlState::CanShowInContentBrowser() const
-{
-    return true;
-}
-
-bool FP4CommandLineSourceControlState::CanShowInExplorer() const
-{
-    return true;
-}
-
-bool FP4CommandLineSourceControlState::CanShowInSystemShell() const
-{
-    return true;
-}
-
-bool FP4CommandLineSourceControlState::IsUASFiltered() const
-{
-    return false;
-}
-
-bool FP4CommandLineSourceControlState::IsPendingAdd() const
-{
-    return IsAdded();
-}
-
-TArray<FSourceControlRevisionRef> FP4CommandLineSourceControlState::GetHistory() const
-{
-    return History;
+	return IsCheckedOut() || IsAdded() || IsDeleted();
 }
 
 void FP4CommandLineSourceControlState::Update(const FString& InAction, int32 InHeadRevision, int32 InHaveRevision, bool bInOtherOpen, const FString& InOtherUser)
 {
-    Action = InAction;
-    HeadRevision = InHeadRevision;
-    HaveRevision = InHaveRevision;
-    bOtherOpen = bInOtherOpen;
-    OtherUserCheckedOut = InOtherUser;
-
-    bCanDelete = CanDelete();
-    bCanAdd = CanAdd();
-    bCanCheckOut = CanCheckOut();
-    bCanRevert = CanRevert();
-    bCanCheckIn = CanCheckIn();
-    bCanDiffAgainstWorkspace = CanDiffAgainstDepot();
+	Action = InAction;
+	HeadRevision = InHeadRevision;
+	HaveRevision = InHaveRevision;
+	bOtherOpen = bInOtherOpen;
+	OtherUserCheckedOut = InOtherUser;
+	TimeStamp = FDateTime::Now();
 }
 
 #undef LOCTEXT_NAMESPACE

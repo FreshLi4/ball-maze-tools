@@ -16,16 +16,14 @@ public:
     virtual const FString& GetUserName() const override;
     virtual const FString& GetClientSpec() const override;
     virtual const FString& GetAction() const override;
+    virtual TSharedPtr<class ISourceControlRevision, ESPMode::ThreadSafe> GetBranchSource() const override;
     virtual const FDateTime& GetDate() const override;
     virtual int32 GetCheckInIdentifier() const override;
     virtual int32 GetFileSize() const override;
-    virtual const FString& GetBranchName() const override;
-    virtual const FString& GetCommitId() const override;
-    virtual bool IsCurrent() const override;
 
     void Update(const FString& InFilename, int32 InRevision, const FString& InDescription, const FString& InUserName, const FDateTime& InDate, const FString& InAction, int32 InChangeList);
 
-private:
+public:
     FString Filename;
     int32 RevisionNumber = 0;
     FString Revision;
@@ -36,6 +34,5 @@ private:
     FDateTime Date;
     int32 ChangeList = 0;
     int32 FileSize = 0;
-    FString BranchName;
-    FString CommitId;
+    TSharedPtr<FP4CommandLineSourceControlRevision, ESPMode::ThreadSafe> BranchSource;
 };

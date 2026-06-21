@@ -2,37 +2,6 @@
 
 #include "CoreMinimal.h"
 #include "ISourceControlOperation.h"
-#include "ISourceControlWorker.h"
-#include "P4CommandLineSourceControlState.h"
-
-class FP4CommandLineSourceControlCommand;
-
-class FP4CommandLineSourceControlWorker : public ISourceControlWorker
-{
-public:
-    virtual ~FP4CommandLineSourceControlWorker() = default;
-
-    virtual FName GetName() const = 0;
-    virtual bool Execute(FP4CommandLineSourceControlCommand& InCommand) = 0;
-    virtual bool UpdateStates() const = 0;
-};
-
-class FGetP4SourceControlWorker
-{
-public:
-    FGetP4SourceControlWorker() = default;
-    FGetP4SourceControlWorker(TFunction<TSharedPtr<FP4CommandLineSourceControlWorker>()> InDelegate)
-        : Delegate(InDelegate)
-    {}
-
-    TSharedPtr<FP4CommandLineSourceControlWorker> Execute() const
-    {
-        return Delegate.IsBound() ? Delegate.Execute() : nullptr;
-    }
-
-private:
-    TFunction<TSharedPtr<FP4CommandLineSourceControlWorker>()> Delegate;
-};
 
 class FP4CommandLineCheckOut : public FCheckOut
 {

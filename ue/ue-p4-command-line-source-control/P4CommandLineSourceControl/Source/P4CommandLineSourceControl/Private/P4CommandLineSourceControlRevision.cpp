@@ -2,23 +2,12 @@
 
 bool FP4CommandLineSourceControlRevision::Get(FString& InOutFilename, EConcurrency::Type InConcurrency) const
 {
-    FString Results, Errors;
-    int32 ReturnCode = 0;
-    FString Parameters = FString::Printf(TEXT("%s#%d"), *Filename, RevisionNumber);
-    
-    extern bool RunP4Command(const FString&, const FString&, FString&, FString&, int32&);
-    bool bSuccess = false; // Simplified: would need P4CommandLineSourceControlUtils::RunP4Command
-    return bSuccess;
+    return false;
 }
 
 bool FP4CommandLineSourceControlRevision::GetAnnotated(TArray<FAnnotationLine>& OutLines) const
 {
-    FString Results, Errors;
-    int32 ReturnCode = 0;
-    FString Parameters = FString::Printf(TEXT("%s#%d"), *Filename, RevisionNumber);
-    
-    bool bSuccess = false; // Simplified
-    return bSuccess;
+    return false;
 }
 
 bool FP4CommandLineSourceControlRevision::GetAnnotated(FString& InOutFilename) const
@@ -62,6 +51,11 @@ const FString& FP4CommandLineSourceControlRevision::GetAction() const
     return Action;
 }
 
+TSharedPtr<class ISourceControlRevision, ESPMode::ThreadSafe> FP4CommandLineSourceControlRevision::GetBranchSource() const
+{
+    return BranchSource;
+}
+
 const FDateTime& FP4CommandLineSourceControlRevision::GetDate() const
 {
     return Date;
@@ -75,21 +69,6 @@ int32 FP4CommandLineSourceControlRevision::GetCheckInIdentifier() const
 int32 FP4CommandLineSourceControlRevision::GetFileSize() const
 {
     return FileSize;
-}
-
-const FString& FP4CommandLineSourceControlRevision::GetBranchName() const
-{
-    return BranchName;
-}
-
-const FString& FP4CommandLineSourceControlRevision::GetCommitId() const
-{
-    return CommitId;
-}
-
-bool FP4CommandLineSourceControlRevision::IsCurrent() const
-{
-    return false;
 }
 
 void FP4CommandLineSourceControlRevision::Update(const FString& InFilename, int32 InRevision, const FString& InDescription, const FString& InUserName, const FDateTime& InDate, const FString& InAction, int32 InChangeList)

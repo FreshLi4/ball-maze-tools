@@ -2,68 +2,58 @@
 
 #include "CoreMinimal.h"
 #include "ISourceControlProvider.h"
-#include "ISourceControlState.h"
-#include "ISourceControlOperation.h"
-#include "P4CommandLineSourceControlCommand.h"
+
+class FP4CommandLineSourceControlState;
 
 class FP4CommandLineSourceControlProvider : public ISourceControlProvider
 {
 public:
     FP4CommandLineSourceControlProvider();
 
+    using ISourceControlProvider::Execute;
+
+    // ISourceControlProvider interface
     virtual void Init(bool bForceConnection = true) override;
     virtual void Close() override;
-
-    virtual bool IsAvailable() const override;
-    virtual bool IsEnabled() const override;
-    virtual bool IsAuthenticated() const override;
-
-    virtual const FName& GetName() const override;
-    virtual FText GetDisplayName() const override;
     virtual FText GetStatusText() const override;
-    virtual bool LearnMore(TArray<FString>& OutInfo) const override;
-    virtual bool Login(const FString& InUsername, const FString& InPassword, const FSourceControlLoginClosed& InOnSourceControlLoginClosed) override;
-    virtual bool Logout() override;
-
-    virtual const TArray<FSourceControlStateRef>& GetCachedStateByPredicate(TFunctionRef<bool(const FSourceControlStateRef&)> Predicate) const override;
-    virtual FSourceControlStatePtr GetState(const FString& Filename, const FName& InBranch = FName()) const override;
-    virtual TArray<FSourceControlStateRef> GetState(const TArray<FString>& Filenames, const FName& InBranch = FName()) override;
-    virtual void UpdateState(const TArray<FSourceControlStateRef>& InSourceControlStates) override;
-
-    virtual bool CanCancelOperation() const override;
-    virtual void CancelOperation() override;
-
-    virtual bool IsOperationValid(const FSourceControlOperationRef& InOperation) const override;
-    virtual TSharedRef<class ISourceControlOperation, ESPMode::ThreadSafe> CreateOperation(const FName& InOperationName) override;
-    virtual bool CanExecuteOperation(const FName& InOperationName) const override;
-    virtual bool Execute(const FSourceControlOperationRef& InOperation, const FSourceControlOperationComplete& InOperationCompleteDelegate = FSourceControlOperationComplete(), EConcurrency::Type InConcurrency = EConcurrency::Synchronous, const FName& InBranch = FName()) override;
-
-    virtual bool CanUpdateStatus() const override;
-    virtual bool UpdateStatus() override;
-
-    virtual bool CanDiffAgainstBase(const FString& InFilename) const override;
-    virtual bool CanDiffAgainstLocal(const FString& InFilename) const override;
-    virtual bool DiffAgainstBase(const FString& InFilename) const override;
-    virtual bool DiffAgainstLocal(const FString& InFilename) const override;
-
-    virtual bool GetHistory(const FString& InFilename, TArray<FSourceControlRevisionRef>& OutHistory) override;
-
-    virtual bool CanUpdateHistory() const override;
-    virtual bool UpdateHistory() override;
-
-    virtual bool GetWorkspaces(TArray<FString>& OutWorkspaces) override;
-    virtual bool SwitchWorkspace(const FString& InWorkspaceName) override;
-
-    void RegisterWorker(const FName& InName, FGetP4SourceControlWorker InDelegate);
+    virtual TMap<EStatus, FString> GetStatus() const override;
+    virtual bool IsEnabled() const override;
+    virtual bool IsAvailable() const override;
+    virtual const FName& GetName() const override;
+    virtual bool QueryStateBranchConfig(const FString& ConfigSrc, const FString& ConfigDest) override;
+    virtual void RegisterStateBranches(const TArray<FString>& BranchNames, const FString& ContentRoot) override;
+    virtual int32 GetStateBranchIndex(const FString& InBranchName) const override;
+    virtual ECommandResult::Type GetState(const TArray<FString>& InFiles, TArray<FSourceControlStateRef>& OutState, EStateCacheUsage::Type InStateCacheUsage) override;
+    virtual ECommandResult::Type GetState(const TArray<FSourceControlChangelistRef>& InChangelists, TArray<FSourceControlChangelistStateRef>& OutState, EStateCacheUsage::Type InStateCacheUsage) override;
+    virtual TArray<FSourceControlStateRef> GetCachedStateByPredicate(TFunctionRef<bool(const FSourceControlStateRef&)> Predicate) const override;
+    virtual FDelegateHandle RegisterSourceControlStateChanged_Handle(const FSourceControlStateChanged::FDelegate& SourceControlStateChanged) override;
+    virtual void UnregisterSourceControlStateChanged_Handle(FDelegateHandle Handle) override;
+    virtual ECommandResult::Type Execute(const FSourceControlOperationRef& InOperation, FSourceControlChangelistPtr InChangelist, const TArray<FString>& InFiles, EConcurrency::Type InConcurrency, const FSourceControlOperationComplete& InOperationCompleteDelegate) override;
+    virtual bool CanExecuteOperation(const FSourceControlOperationRef& InOperation) const override;
+    virtual bool CanCancelOperation(const FSourceControlOperationRef& InOperation) const override;
+    virtual void CancelOperation(const FSourceControlOperationRef& InOperation) override;
+    virtual bool UsesLocalReadOnlyState() const override;
+    virtual bool UsesChangelists() const override;
+    virtual bool UsesUncontrolledChangelists() const override;
+    virtual bool UsesCheckout() const override;
+    virtual bool UsesFileRevisions() const override;
+    virtual bool UsesSnapshots() const override;
+    virtual bool AllowsDiffAgainstDepot() const override;
+    virtual TOptional<bool> IsAtLatestRevision() const override;
+    virtual TOptional<int> GetNumLocalChanges() const override;
+    virtual void Tick() override;
+    virtual TArray<TSharedRef<class ISourceControlLabel>> GetLabels(const FString& InMatchingSpec) const override;
+    virtual TArray<FSourceControlChangelistRef> GetChangelists(EStateCacheUsage::Type InStateCacheUsage) override;
+#if SOURCE_CONTROL_WITH_SLATE
+    virtual TSharedRef<class SWidget> MakeSettingsWidget() const override;
+#endif
 
 private:
     bool CheckP4Availability();
-    bool ExecuteSynchronousCommand(FP4CommandLineSourceControlCommand& InCommand, const FText& TaskName);
-    bool ExecuteAsynchronousCommand(FP4CommandLineSourceControlCommand& InCommand);
-    bool ParseStatusResults(const FString& InResults, TArray<FSourceControlStateRef>& OutStates);
+    TSharedRef<FP4CommandLineSourceControlState> GetStateInternal(const FString& Filename);
 
-    bool bSourceControlAvailable = false;
+    bool bSourceControlAvailable;
     FName ProviderName;
-    TMap<FString, FSourceControlStateRef> CachedStates;
-    TMap<FName, FGetP4SourceControlWorker> WorkersMap;
+    TMap<FString, TSharedRef<FP4CommandLineSourceControlState>> StateCache;
+    FSourceControlStateChanged OnSourceControlStateChanged;
 };

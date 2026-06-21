@@ -30,44 +30,35 @@ bool FP4CommandLineSourceControlUtils::ParseStatusResult(const FString& InResult
             }
             
             FString DepotPath = Line.RightChop(14).TrimStartAndEnd();
-            FString LocalPath = GetLocalPath(DepotPath);
-            CurrentState = MakeShareable(new FP4CommandLineSourceControlState(LocalPath));
-            CurrentState->Update(TEXT(""), 0, 0, false, TEXT(""));
+            CurrentState = MakeShareable(new FP4CommandLineSourceControlState(TEXT("")));
+            CurrentState->DepotFilename = DepotPath;
         }
         else if (Line.StartsWith(TEXT("... clientFile")))
         {
             if (CurrentState.IsValid())
             {
-                FString ClientPath = Line.RightChop(15).TrimStartAndEnd();
-                // Client path might differ from local path, but we use the original filename
+                CurrentState->LocalFilename = Line.RightChop(15).TrimStartAndEnd();
             }
         }
         else if (Line.StartsWith(TEXT("... headRev")))
         {
             if (CurrentState.IsValid())
             {
-                int32 HeadRev = FCString::Atoi(*Line.RightChop(12).TrimStartAndEnd());
-                CurrentState->Update(CurrentState->IsAdded() ? TEXT("add") : TEXT(""), HeadRev, CurrentState->IsCurrent() ? HeadRev : 0, CurrentState->IsCheckedOutOther(), TEXT(""));
+                CurrentState->HeadRevision = FCString::Atoi(*Line.RightChop(12).TrimStartAndEnd());
             }
         }
         else if (Line.StartsWith(TEXT("... haveRev")))
         {
             if (CurrentState.IsValid())
             {
-                int32 HaveRev = FCString::Atoi(*Line.RightChop(12).TrimStartAndEnd());
-                // Update with haveRev but keep headRev
-                CurrentState->Update(CurrentState->IsAdded() ? TEXT("add") : TEXT(""), CurrentState->IsCurrent() ? HaveRev : 0, HaveRev, CurrentState->IsCheckedOutOther(), TEXT(""));
+                CurrentState->HaveRevision = FCString::Atoi(*Line.RightChop(12).TrimStartAndEnd());
             }
         }
         else if (Line.StartsWith(TEXT("... action")))
         {
             if (CurrentState.IsValid())
             {
-                FString Action = Line.RightChop(11).TrimStartAndEnd();
-                int32 HeadRev = 0;
-                int32 HaveRev = 0;
-                // Need to preserve existing headRev/haveRev
-                CurrentState->Update(Action, HeadRev, HaveRev, CurrentState->IsCheckedOutOther(), TEXT(""));
+                CurrentState->Action = Line.RightChop(11).TrimStartAndEnd();
             }
         }
         else if (Line.StartsWith(TEXT("... otherOpen")))
@@ -75,10 +66,7 @@ bool FP4CommandLineSourceControlUtils::ParseStatusResult(const FString& InResult
             if (CurrentState.IsValid())
             {
                 int32 OtherOpen = FCString::Atoi(*Line.RightChop(14).TrimStartAndEnd());
-                if (OtherOpen > 0)
-                {
-                    CurrentState->Update(CurrentState->IsAdded() ? TEXT("add") : TEXT(""), 0, 0, true, TEXT(""));
-                }
+                CurrentState->bOtherOpen = (OtherOpen > 0);
             }
         }
         else if (Line.StartsWith(TEXT("... otherOpen0")))
@@ -86,13 +74,11 @@ bool FP4CommandLineSourceControlUtils::ParseStatusResult(const FString& InResult
             if (CurrentState.IsValid())
             {
                 FString OtherOpenInfo = Line.RightChop(15).TrimStartAndEnd();
-                // Format: otherOpen0-user or otherOpen0-client-user
                 TArray<FString> Parts;
                 OtherOpenInfo.ParseIntoArray(Parts, TEXT("-"), true);
                 if (Parts.Num() >= 2)
                 {
-                    FString OtherUser = Parts[1];
-                    CurrentState->Update(CurrentState->IsAdded() ? TEXT("add") : TEXT(""), 0, 0, true, OtherUser);
+                    CurrentState->OtherUserCheckedOut = Parts[1];
                 }
             }
         }

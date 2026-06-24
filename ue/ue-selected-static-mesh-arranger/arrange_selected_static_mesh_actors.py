@@ -6,10 +6,10 @@ import unreal
 # ============================================================
 
 # Center-to-center distance between arranged actors, in Unreal units.
-SPACING = 100.0
+SPACING = 2.0
 
 # World-space direction used for the arrangement. The script normalizes it.
-DIRECTION = unreal.Vector(1.0, 0.0, 0.0)
+DIRECTION = unreal.Vector(0.0, 1.0, 0.0)
 
 # True = keep the current selected actors selected after moving them.
 RESTORE_SELECTION = True
